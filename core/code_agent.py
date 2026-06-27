@@ -7,6 +7,7 @@ from core.tools.tools import (
     READ_ONLY_TOOL_REGISTRATIONS,
     FS_READ_ONLY_TOOLS,
 )
+from core.tools.shell import Shell
 from core.state.state import AgentStateManager
 from dataclasses import asdict, dataclass, field
 import json
@@ -101,6 +102,11 @@ class CodeAgent:
         self.read_only_file_system_tools.append(
             {"type": "function", "function": self.__get_plan_finish_definition()}
         )
+        self.read_only_planning_tools = [
+            tool
+            for tool in self.read_only_file_system_tools
+            if tool["function"]["name"] not in {"list_files", "get_directory_tree"}
+        ]
         self.read_only_tool_registrations = dict(READ_ONLY_TOOL_REGISTRATIONS)
         self.read_only_tool_registrations["plan_finish"] = self.plan_finish
 
@@ -181,9 +187,42 @@ class CodeAgent:
             tools=tools,
         )
 
+    @staticmethod
+    def _assistant_message_to_dict(message) -> dict:
+        assistant_message = {
+            "role": "assistant",
+            "content": message.content or "",
+        }
+        if message.tool_calls:
+            assistant_message["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": tool_call.type,
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    },
+                }
+                for tool_call in message.tool_calls
+            ]
+        return assistant_message
+
+    @staticmethod
+    def _resolve_target_directory(path: str) -> str:
+        candidate = os.path.abspath(path)
+        if os.path.isfile(candidate):
+            return os.path.dirname(candidate)
+        return candidate
+
+    @staticmethod
+    def _truncate_for_context(text: str, max_chars: int = 12000) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "\n... (truncated)"
+
     def _execute_tool(self, tool_call, tool_registrations: dict | None = None):
         tool_name = tool_call.function.name
-        args = json.loads(tool_call.function.arguments)
+        args = json.loads(tool_call.function.arguments or "{}")
 
         print(f"Running tool: {tool_name}")
 
@@ -197,6 +236,11 @@ class CodeAgent:
     def generate_plan_of_action(self, prompt: str, path: str) -> str:
         self.agent_state_manager.update_state("planning")
 
+        target_dir = self._resolve_target_directory(path)
+        change_dir_result = Shell.change_directory(target_dir)
+        initial_files = self._truncate_for_context(Shell.list_files())
+        initial_tree = self._truncate_for_context(Shell.get_directory_tree())
+
         context = AgentContext(
             current_task=prompt,
             working_directory=os.getcwd(),
@@ -206,21 +250,36 @@ class CodeAgent:
                 "role": "system",
                 "content": PLANNING_SYSTEM_PROMPT,
             },
-            {"role": "user", "content": f"{prompt}\nTarget file or folder: {path}"},
+            {
+                "role": "user",
+                "content": (
+                    f"{prompt}\n"
+                    f"Target file or folder: {path}\n"
+                    f"Directory setup: {change_dir_result}\n"
+                    f"Current working directory: {Shell.current_directory}\n\n"
+                    "Initial project snapshot (already gathered; do not call list_files/get_directory_tree again):\n"
+                    f"Files:\n{initial_files}\n\n"
+                    f"Tree:\n{initial_tree}"
+                ),
+            },
         ]
+
+        consecutive_structure_only_iterations = 0
 
         while context.iteration < context.max_iterations:
             context.iteration += 1
             print(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state("planning")
-            response = self.__call_llm(context, self.read_only_file_system_tools)
+            response = self.__call_llm(context, self.read_only_planning_tools)
             message = response.choices[0].message
-            context.messages.append(message.model_dump())
+            context.messages.append(self._assistant_message_to_dict(message))
 
             if message.content:
                 print(f"LLM Response: {message.content}")
 
+            tool_names = []
             for tool_call in message.tool_calls or []:
+                tool_names.append(tool_call.function.name)
                 if tool_call.function.name == "plan_finish":
                     print("Plan finished successfully.")
                     self.agent_state_manager.update_state("planning_completed")
@@ -233,7 +292,7 @@ class CodeAgent:
                     context.messages.append(
                         {
                             "role": "tool",
-                            "content": json.dumps(result),
+                            "content": str(result),
                             "tool_call_id": tool_call.id,
                         }
                     )
@@ -245,10 +304,34 @@ class CodeAgent:
                     context.messages.append(
                         {
                             "role": "tool",
-                            "content": json.dumps({"error": error_message}),
+                            "content": error_message,
                             "tool_call_id": tool_call.id,
                         }
                     )
+
+            if tool_names and set(tool_names).issubset({"list_files", "get_directory_tree"}):
+                consecutive_structure_only_iterations += 1
+            else:
+                consecutive_structure_only_iterations = 0
+
+            if consecutive_structure_only_iterations >= 3:
+                context.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Stop repeating project structure inspection. "
+                            "You already have enough structure context. "
+                            "Read only files directly relevant to the task and then call plan_finish."
+                        ),
+                    }
+                )
+
+            if consecutive_structure_only_iterations >= 6:
+                self.agent_state_manager.update_state("error")
+                raise RuntimeError(
+                    "Planning is stuck in repeated list_files/get_directory_tree calls. "
+                    "Aborting to avoid an infinite loop."
+                )
 
         self.agent_state_manager.update_state("error")
         raise RuntimeError(
@@ -258,6 +341,9 @@ class CodeAgent:
 
     def generate_code(self, prompt: str, path: str) -> str:
         self.agent_state_manager.update_state("initializing")
+
+        target_dir = self._resolve_target_directory(path)
+        Shell.change_directory(target_dir)
 
         context = AgentContext(
             current_task=prompt,
@@ -272,6 +358,7 @@ class CodeAgent:
         ]
 
         plan = self.generate_plan_of_action(prompt, path)
+        print(f"Plan of Action:\n{plan}")
         context.messages.append(
             {"role": "assistant", "content": f"Plan of Action: {plan}"}
         )
@@ -281,7 +368,7 @@ class CodeAgent:
             self.agent_state_manager.update_state("editing")
             response = self.__call_llm(context, self.file_system_tools)
             message = response.choices[0].message
-            context.messages.append(message.model_dump())
+            context.messages.append(self._assistant_message_to_dict(message))
 
             if message.content:
                 print(f"LLM Response: {message.content}")
@@ -297,7 +384,7 @@ class CodeAgent:
                     context.messages.append(
                         {
                             "role": "tool",
-                            "content": json.dumps(result),
+                            "content": str(result),
                             "tool_call_id": tool_call.id,
                         }
                     )
@@ -309,7 +396,7 @@ class CodeAgent:
                     context.messages.append(
                         {
                             "role": "tool",
-                            "content": json.dumps({"error": error_message}),
+                            "content": error_message,
                             "tool_call_id": tool_call.id,
                         }
                     )
