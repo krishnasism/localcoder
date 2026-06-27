@@ -17,4 +17,4 @@ class AgentContext:
 class FinishResult:
     status: str
     summary: str
-    artifacts: list[str] = None
+    artifacts: list[str] = field(default_factory=list)

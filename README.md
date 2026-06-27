@@ -1,6 +1,6 @@
 # Local Coder
 
-Trying out coding with Agents..
+Trying out coding with Agents. Did a course on Agents and now trying out. Nothing for production here!
 
 Two phases:
 - **Planning**: reads project context and creates a plan.
@@ -89,8 +89,7 @@ pytest -q
 
 ## Notes
 
-- Keep path inputs absolute on Windows for best results.
-- If the model starts repeating structure inspection, loop guards stop execution with a clear error.
-- The planning stage should call `plan_finish`; the editing stage should call `finish`.
+- Keep path inputs absolute for best results (well idk)
+- If the model starts repeating, try with a more precise prompt
 
 
