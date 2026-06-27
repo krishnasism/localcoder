@@ -145,9 +145,7 @@ class CodeAgent:
 
     @staticmethod
     def _fallback_plan(prompt: str) -> str:
-        return (
-            f"Task focus: {prompt}"
-        )
+        return f"Task focus: {prompt}"
 
     def _execute_tool(
         self,
@@ -235,9 +233,9 @@ class CodeAgent:
                         allowed_tool_names=allowed_planning_tools,
                     )
                     context.tool_results[tool_call.id] = result
-                    if not str(result).startswith("Tool '") and not str(result).startswith(
-                        "Unknown tool"
-                    ):
+                    if not str(result).startswith("Tool '") and not str(
+                        result
+                    ).startswith("Unknown tool"):
                         iteration_had_progress = True
                     context.messages.append(
                         {
@@ -395,9 +393,9 @@ class CodeAgent:
                         allowed_tool_names=allowed_editing_tools,
                     )
                     context.tool_results[tool_call.id] = result
-                    if not str(result).startswith("Tool '") and not str(result).startswith(
-                        "Unknown tool"
-                    ):
+                    if not str(result).startswith("Tool '") and not str(
+                        result
+                    ).startswith("Unknown tool"):
                         iteration_had_progress = True
                     context.messages.append(
                         {

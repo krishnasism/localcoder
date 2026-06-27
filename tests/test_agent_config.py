@@ -1,4 +1,3 @@
-import os
 from unittest import mock
 from dataclasses import asdict
 from core.agent.config import AgentConfig, load_agent_config

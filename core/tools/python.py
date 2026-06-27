@@ -1,5 +1,6 @@
 from core.tools.shell import Shell
 
+
 class PythonTools:
     def setup_python_virtual_env(self, env_name: str) -> str:
         try:
@@ -30,7 +31,7 @@ class PythonTools:
             return result.stdout + result.stderr
         except Exception as e:
             return f"Error running pytest: {str(e)}"
-    
+
     def run_pytest_with_coverage(self, test_file_or_folder: str) -> str:
         try:
             import subprocess
