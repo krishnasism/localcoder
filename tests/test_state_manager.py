@@ -1,4 +1,3 @@
-import os
 from core.state.state import AgentStateManager
 
 
@@ -31,8 +30,16 @@ class TestAgentStateManager:
     def test_get_code_editing_states_returns_all_expected_keys(self):
         states = AgentStateManager.get_code_editing_states()
         expected_states = {
-            "initializing", "planning", "planning_completed", "editing",
-            "reviewing", "testing", "committing", "idle", "completed", "error",
+            "initializing",
+            "planning",
+            "planning_completed",
+            "editing",
+            "reviewing",
+            "testing",
+            "committing",
+            "idle",
+            "completed",
+            "error",
         }
         assert set(states.keys()) == expected_states
 

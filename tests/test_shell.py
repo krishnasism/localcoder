@@ -34,7 +34,10 @@ class TestShellFileOperations:
             assert result == content
 
             # Delete the file
-            assert Shell.delete_file(filename) == f"File '{filename}' deleted successfully."
+            assert (
+                Shell.delete_file(filename)
+                == f"File '{filename}' deleted successfully."
+            )
             assert not os.path.exists(os.path.join(td, filename))
         finally:
             self._restore(original_dir)
@@ -51,13 +54,21 @@ class TestShellFileOperations:
             assert os.path.isfile(os.path.join(td, src_name))
 
             # Copy
-            assert Shell.copy_file(src_name, dest_name) == f"File '{src_name}' copied to '{dest_name}' successfully."
-            assert os.path.isfile(os.path.join(td, src_name))  # source should still exist
+            assert (
+                Shell.copy_file(src_name, dest_name)
+                == f"File '{src_name}' copied to '{dest_name}' successfully."
+            )
+            assert os.path.isfile(
+                os.path.join(td, src_name)
+            )  # source should still exist
             assert os.path.isfile(os.path.join(td, dest_name))
 
             # Move (rename) the copy
             moved_name = "moved_unit.txt"
-            assert Shell.move_file(dest_name, moved_name) == f"File '{dest_name}' moved to '{moved_name}' successfully."
+            assert (
+                Shell.move_file(dest_name, moved_name)
+                == f"File '{dest_name}' moved to '{moved_name}' successfully."
+            )
             assert not os.path.exists(os.path.join(td, dest_name))  # original copy gone
             assert os.path.isfile(os.path.join(td, moved_name))
 
@@ -71,7 +82,10 @@ class TestShellFileOperations:
         td, original_dir = self._chdir_to_temp()
         try:
             Shell.write_file(filename, "line_one\n")
-            assert Shell.append_to_file(filename, "line_two\n") == f"Appended content to {filename}"
+            assert (
+                Shell.append_to_file(filename, "line_two\n")
+                == f"Appended content to {filename}"
+            )
             result = Shell.read_file(filename)
             assert result == "line_one\nline_two\n"
         finally:
@@ -81,7 +95,9 @@ class TestShellFileOperations:
         dirname = "nested_test_dir"
         td, original_dir = self._chdir_to_temp()
         try:
-            assert Shell.mkdir(dirname) == f"Directory '{dirname}' created successfully."
+            assert (
+                Shell.mkdir(dirname) == f"Directory '{dirname}' created successfully."
+            )
             assert os.path.isdir(os.path.join(td, dirname))
 
             # Create a file inside the subdir and read it via Shell
