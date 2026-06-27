@@ -5,6 +5,109 @@ class Shell:
     current_directory = os.getcwd()
 
     @staticmethod
+    def find_files(pattern: str) -> str:
+        try:
+            matches = []
+            for root, dirs, files in os.walk(Shell.current_directory):
+                for filename in files:
+                    if pattern in filename:
+                        matches.append(os.path.join(root, filename))
+            return "\n".join(matches)
+        except Exception as e:
+            return f"Error finding files: {str(e)}"
+
+    @staticmethod
+    def search_text_in_files(pattern: str) -> str:
+        try:
+            matches = []
+            for root, dirs, files in os.walk(Shell.current_directory):
+                for filename in files:
+                    file_path = os.path.join(root, filename)
+                    with open(file_path, "r", errors="ignore") as file:
+                        for line_number, line in enumerate(file, start=1):
+                            if pattern in line:
+                                matches.append(
+                                    f"{file_path}:{line_number}: {line.strip()}"
+                                )
+            return "\n".join(matches)
+        except Exception as e:
+            return f"Error searching text in files: {str(e)}"
+
+    @staticmethod
+    def mkdir(path: str) -> str:
+        try:
+            os.makedirs(os.path.join(Shell.current_directory, path), exist_ok=True)
+            return f"Directory '{path}' created successfully."
+        except Exception as e:
+            return f"Error creating directory: {str(e)}"
+
+    @staticmethod
+    def delete_file(filename: str) -> str:
+        try:
+            os.remove(os.path.join(Shell.current_directory, filename))
+            return f"File '{filename}' deleted successfully."
+        except Exception as e:
+            return f"Error deleting file: {str(e)}"
+
+    @staticmethod
+    def move_file(src: str, dest: str) -> str:
+        try:
+            os.rename(
+                os.path.join(Shell.current_directory, src),
+                os.path.join(Shell.current_directory, dest),
+            )
+            return f"File '{src}' moved to '{dest}' successfully."
+        except Exception as e:
+            return f"Error moving file: {str(e)}"
+
+    @staticmethod
+    def copy_file(src: str, dest: str) -> str:
+        try:
+            import shutil
+
+            shutil.copy(
+                os.path.join(Shell.current_directory, src),
+                os.path.join(Shell.current_directory, dest),
+            )
+            return f"File '{src}' copied to '{dest}' successfully."
+        except Exception as e:
+            return f"Error copying file: {str(e)}"
+
+    @staticmethod
+    def move_file_to_directory(src: str, dest_dir: str) -> str:
+        try:
+            os.makedirs(os.path.join(Shell.current_directory, dest_dir), exist_ok=True)
+            os.rename(
+                os.path.join(Shell.current_directory, src),
+                os.path.join(Shell.current_directory, dest_dir, src),
+            )
+            return f"File '{src}' moved to directory '{dest_dir}' successfully."
+        except Exception as e:
+            return f"Error moving file to directory: {str(e)}"
+
+    @staticmethod
+    def append_to_file(filename: str, content: str) -> str:
+        try:
+            with open(os.path.join(Shell.current_directory, filename), "a") as file:
+                file.write(content)
+            return f"Appended content to {filename}"
+        except Exception as e:
+            return f"Error appending to file: {str(e)}"
+
+    @staticmethod
+    def run_shell_command(command: str) -> str:
+        try:
+            import subprocess
+
+            result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            if result.returncode == 0:
+                return result.stdout
+            else:
+                return f"Error executing command: {result.stderr}"
+        except Exception as e:
+            return f"Error executing shell command: {str(e)}"
+
+    @staticmethod
     def change_directory(path: str) -> str:
         try:
             os.chdir(path)

@@ -1,10 +1,38 @@
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
-from core.tools.tools import FS_TOOLS, TOOL_REGISTRATIONS
+from core.tools.tools import (
+    FS_TOOLS,
+    TOOL_REGISTRATIONS,
+    READ_ONLY_TOOL_REGISTRATIONS,
+    FS_READ_ONLY_TOOLS,
+)
 from core.state.state import AgentStateManager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
+
+PLANNING_SYSTEM_PROMPT = """
+You are an autonomous software engineer.
+Your objective is to modify the user's project. However this step is only the planning step. You will only generate a plan first.
+Rules:
+- Never assume file contents.
+- Always inspect the project first before planning.
+- Read files before planning changes.
+- Plan minimal edits.
+- Use available tools whenever needed.
+- Verify your changes after planning.
+- Continue working until the task is complete.
+- Only finish once the requested plan has been made.
+
+Recommended workflow:
+
+1. Inspect project
+2. Read relevant files
+3. Plan code changes if necessary
+4. Plan to generate new files if necessary
+5. Verify planned modifications
+6. Finish
+"""
 
 SYSTEM_PROMPT = """
 You are an autonomous software engineer.
@@ -26,8 +54,9 @@ Recommended workflow:
 1. Inspect project
 2. Read relevant files
 3. Modify code
-4. Verify modifications
-5. Finish
+4. Generate new files if necessary
+5. Verify modifications
+6. Finish
 """
 
 
@@ -43,6 +72,13 @@ class AgentContext:
     max_iterations: int = 20
 
 
+@dataclass
+class FinishResult:
+    status: str
+    summary: str
+    artifacts: list[str] = None
+
+
 class CodeAgent:
     def __init__(self):
         load_dotenv()
@@ -52,31 +88,172 @@ class CodeAgent:
             base_url=os.getenv("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
             api_key=os.getenv("OPENAI_API_KEY", "local"),
         )
-        self.file_system_tools = FS_TOOLS
-        self.tool_registrations = TOOL_REGISTRATIONS
+
+        # All Tools
+        self.file_system_tools = list(FS_TOOLS)
+        self.file_system_tools.append(
+            {"type": "function", "function": self.__get_finish_definition()}
+        )
+        self.tool_registrations = dict(TOOL_REGISTRATIONS)
+        self.tool_registrations["finish"] = self.finish
+
+        # Read Only Tools - Planning Phase
+        self.read_only_file_system_tools = list(FS_READ_ONLY_TOOLS)
+        self.read_only_file_system_tools.append(
+            {"type": "function", "function": self.__get_plan_finish_definition()}
+        )
+        self.read_only_tool_registrations = dict(READ_ONLY_TOOL_REGISTRATIONS)
+        self.read_only_tool_registrations["plan_finish"] = self.plan_finish
+
         self.agent_state_manager = AgentStateManager()
 
-    def __call_llm(self, context: AgentContext) -> str:
+    def plan_finish(self, summary: str, artifacts: list[str] = None) -> dict:
+        """
+        Called when the agent has completed the planning phase.
+        """
+
+        self.agent_state_manager.update_state("planning_completed")
+
+        result = FinishResult(
+            status="planning_completed", summary=summary, artifacts=artifacts or []
+        )
+
+        return asdict(result)
+
+    def finish(self, summary: str, artifacts: list[str] = None) -> dict:
+        """
+        Called when the agent has completed the task.
+        """
+
+        self.agent_state_manager.update_state("completed")
+
+        result = FinishResult(
+            status="completed", summary=summary, artifacts=artifacts or []
+        )
+
+        return asdict(result)
+
+    def __get_plan_finish_definition(self):
+        return {
+            "name": "plan_finish",
+            "description": "Indicates that the agent has completed the planning phase and is ready to edit code.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "A summary of the planning completion.",
+                    },
+                    "artifacts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of artifacts generated during the planning phase.",
+                    },
+                },
+                "required": ["summary"],
+            },
+        }
+
+    def __get_finish_definition(self):
+        return {
+            "name": "finish",
+            "description": "Indicates that the agent has completed the task, and no more tasks need to be done.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "A summary of the task completion.",
+                    },
+                    "artifacts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of artifacts generated during the task.",
+                    },
+                },
+                "required": ["summary"],
+            },
+        }
+
+    def __call_llm(self, context: AgentContext, tools: list) -> str:
         return self.client.chat.completions.create(
             model=self.model,
             messages=context.messages,
-            tools=self.file_system_tools,
+            tools=tools,
         )
 
-    def _execute_tool(self, tool_call):
+    def _execute_tool(self, tool_call, tool_registrations: dict | None = None):
         tool_name = tool_call.function.name
         args = json.loads(tool_call.function.arguments)
 
         print(f"Running tool: {tool_name}")
 
-        fn = self.tool_registrations.get(tool_name)
+        fn = (tool_registrations or self.tool_registrations).get(tool_name)
 
         if fn is None:
             raise ValueError(f"Unknown tool '{tool_name}'")
 
         return fn(**args)
 
+    def generate_plan_of_action(self, prompt: str, path: str) -> str:
+        self.agent_state_manager.update_state("planning")
+
+        context = AgentContext(
+            current_task=prompt,
+            working_directory=os.getcwd(),
+        )
+        context.messages = [
+            {
+                "role": "system",
+                "content": PLANNING_SYSTEM_PROMPT,
+            },
+            {"role": "user", "content": f"{prompt}\nTarget file or folder: {path}"},
+        ]
+
+        while context.iteration < context.max_iterations:
+            context.iteration += 1
+            print(f"Iteration {context.iteration} of {context.max_iterations}")
+            self.agent_state_manager.update_state("planning")
+            response = self.__call_llm(context, self.read_only_file_system_tools)
+            message = response.choices[0].message
+            context.messages.append(message)
+
+            if message.content:
+                print(f"LLM Response: {message.content}")
+
+            for tool_call in message.tool_calls or []:
+                if tool_call.function.name == "plan_finish":
+                    print("Plan finished successfully.")
+                    self.agent_state_manager.update_state("planning_completed")
+                    return message.content
+                try:
+                    result = self._execute_tool(
+                        tool_call, self.read_only_tool_registrations
+                    )
+                    context.tool_results[tool_call.id] = result
+                    context.messages.append(
+                        {
+                            "role": "tool",
+                            "content": json.dumps(result),
+                            "tool_call_id": tool_call.id,
+                        }
+                    )
+                except Exception as e:
+                    error_message = (
+                        f"Error executing tool '{tool_call.function.name}': {str(e)}"
+                    )
+                    self.agent_state_manager.update_state("error")
+                    context.messages.append(
+                        {
+                            "role": "tool",
+                            "content": json.dumps({"error": error_message}),
+                            "tool_call_id": tool_call.id,
+                        }
+                    )
+
     def generate_code(self, prompt: str, path: str) -> str:
+        self.agent_state_manager.update_state("initializing")
+
         context = AgentContext(
             current_task=prompt,
             working_directory=os.getcwd(),
@@ -89,26 +266,28 @@ class CodeAgent:
             {"role": "user", "content": f"{prompt}\nTarget file: {path}"},
         ]
 
-        self.agent_state_manager.update_state("initializing")
+        plan = self.generate_plan_of_action(prompt, path)
+        context.messages.append(
+            {"role": "assistant", "content": f"Plan of Action: {plan}"}
+        )
         while context.iteration < context.max_iterations:
             context.iteration += 1
             print(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state("editing")
-            response = self.__call_llm(context)
+            response = self.__call_llm(context, self.file_system_tools)
             message = response.choices[0].message
             context.messages.append(message)
 
             if message.content:
                 print(f"LLM Response: {message.content}")
 
-            if not message.tool_calls:
-                print("No tool calls in the response. Assuming task is complete.")
-                self.agent_state_manager.update_state("completed")
-                return message.content
-
-            for tool_call in message.tool_calls:
+            for tool_call in message.tool_calls or []:
+                if tool_call.function.name == "finish":
+                    print("Task completed successfully.")
+                    self.agent_state_manager.update_state("completed")
+                    return message.content
                 try:
-                    result = self._execute_tool(tool_call)
+                    result = self._execute_tool(tool_call, self.tool_registrations)
                     context.tool_results[tool_call.id] = result
                     context.messages.append(
                         {
@@ -136,4 +315,5 @@ class CodeAgent:
         return self.__call_llm(
             system="You are a helpful assistant that explains code.",
             user=f"Query: {query}\nCode:\n{code_content}",
+            tools=FS_TOOLS,
         )

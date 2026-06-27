@@ -6,6 +6,8 @@ class AgentStateManager:
     def get_code_editing_states() -> dict:
         return {
             "initializing": "The agent is initializing the code editing environment.",
+            "planning": "The agent is planning the code editing tasks.",
+            "planning_completed": "The agent has completed the planning phase and is ready to edit code.",
             "editing": "The agent is currently editing code.",
             "reviewing": "The agent is reviewing the code changes.",
             "testing": "The agent is testing the code.",

@@ -1,12 +1,87 @@
 from core.tools.shell import Shell
 
-TOOL_REGISTRATIONS = {
+READ_ONLY_TOOL_REGISTRATIONS: dict[str, callable] = {
+    "change_directory": Shell.change_directory,
+    "list_files": Shell.list_files,
+    "get_directory_tree": Shell.get_directory_tree,
+    "read_file": Shell.read_file,
+}
+FS_READ_ONLY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "change_directory",
+            "description": "Change the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The path to change the current working directory to.",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "List all files in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_directory_tree",
+            "description": "Get a tree representation of the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read the contents of a file in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The name of the file to read.",
+                    }
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+]
+TOOL_REGISTRATIONS: dict[str, callable] = {
     "change_directory": Shell.change_directory,
     "list_files": Shell.list_files,
     "get_directory_tree": Shell.get_directory_tree,
     "read_file": Shell.read_file,
     "sed": Shell.sed,
     "write_file": Shell.write_file,
+    "find_files": Shell.find_files,
+    "search_text_in_files": Shell.search_text_in_files,
+    "mkdir": Shell.mkdir,
+    "delete_file": Shell.delete_file,
+    "move_file": Shell.move_file,
+    "copy_file": Shell.copy_file,
+    "move_file_to_directory": Shell.move_file_to_directory,
+    "append_to_file": Shell.append_to_file,
+    "run_shell_command": Shell.run_shell_command,
 }
 
 FS_TOOLS = [
@@ -119,6 +194,175 @@ FS_TOOLS = [
                     },
                 },
                 "required": ["filename", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_files",
+            "description": "Find files in the current working directory tree by filename pattern.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Substring pattern to match against file names.",
+                    }
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_text_in_files",
+            "description": "Search for text in all files under the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Text pattern to search for in file contents.",
+                    }
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mkdir",
+            "description": "Create a directory (and parents if needed) in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path of the directory to create.",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "Delete a file in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The file to delete.",
+                    }
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_file",
+            "description": "Move or rename a file in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {
+                        "type": "string",
+                        "description": "Source file path.",
+                    },
+                    "dest": {
+                        "type": "string",
+                        "description": "Destination file path.",
+                    },
+                },
+                "required": ["src", "dest"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "copy_file",
+            "description": "Copy a file in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {
+                        "type": "string",
+                        "description": "Source file path.",
+                    },
+                    "dest": {
+                        "type": "string",
+                        "description": "Destination file path.",
+                    },
+                },
+                "required": ["src", "dest"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_file_to_directory",
+            "description": "Move a file into a destination directory, creating the directory if needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {
+                        "type": "string",
+                        "description": "Source file path.",
+                    },
+                    "dest_dir": {
+                        "type": "string",
+                        "description": "Destination directory path.",
+                    },
+                },
+                "required": ["src", "dest_dir"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_to_file",
+            "description": "Append content to a file in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The file to append to.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to append.",
+                    },
+                },
+                "required": ["filename", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_shell_command",
+            "description": "Run an arbitrary shell command and return stdout/stderr.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to execute.",
+                    }
+                },
+                "required": ["command"],
             },
         },
     },
