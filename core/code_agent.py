@@ -100,7 +100,7 @@ class CodeAgent:
 
             if message.content:
                 print(f"LLM Response: {message.content}")
-            
+
             if not message.tool_calls:
                 print("No tool calls in the response. Assuming task is complete.")
                 self.agent_state_manager.update_state("completed")
@@ -118,7 +118,9 @@ class CodeAgent:
                         }
                     )
                 except Exception as e:
-                    error_message = f"Error executing tool '{tool_call.function.name}': {str(e)}"
+                    error_message = (
+                        f"Error executing tool '{tool_call.function.name}': {str(e)}"
+                    )
                     self.agent_state_manager.update_state("error")
                     context.messages.append(
                         {
