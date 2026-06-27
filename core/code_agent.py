@@ -1,119 +1,43 @@
 from openai import OpenAI
-import os
 from dotenv import load_dotenv
-from core.tools.tools import (
-    FS_TOOLS,
-    TOOL_REGISTRATIONS,
-    READ_ONLY_TOOL_REGISTRATIONS,
-    FS_READ_ONLY_TOOLS,
+from core.agent.config import load_agent_config
+from core.agent.models import AgentContext, FinishResult
+from core.agent.prompts import PLANNING_SYSTEM_PROMPT, SYSTEM_PROMPT
+from core.agent.toolsets import build_tool_registry
+from core.agent.utils import (
+    assistant_message_to_dict,
+    resolve_target_directory,
+    truncate_for_context,
 )
 from core.tools.shell import Shell
 from core.state.state import AgentStateManager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 import json
-
-PLANNING_SYSTEM_PROMPT = """
-You are an autonomous software engineer.
-Your objective is to modify the user's project. However this step is only the planning step. You will only generate a plan first.
-Rules:
-- Never assume file contents.
-- Always inspect the project first before planning. Do not inspect too much. Start to plan as soon as you have enough information.
-- Priority is to finish the plan. This provides a clear path to the next agent.
-- Plan minimal edits.
-- Use available tools whenever needed.
-- IMPORTANT: when the plan is ready, you MUST call the `plan_finish` tool with a concise summary.
-
-Recommended workflow:
-
-1. Inspect project
-2. Read relevant files
-3. Plan code changes if necessary
-4. Plan to generate new files if necessary
-5. Verify planned modifications
-6. Finish
-"""
-
-SYSTEM_PROMPT = """
-You are an autonomous software engineer.
-
-Your objective is to modify the user's project.
-
-Rules:
-- Never assume file contents.
-- Always inspect the project before editing.
-- Read files before making changes.
-- Prefer minimal edits.
-- Use available tools whenever needed.
-- Verify your changes after editing.
-- Continue working until the task is complete.
-- Only finish once the requested modification has been made.
-- IMPORTANT: when the task is complete, you MUST call the `finish` tool with a concise summary.
-- Do not repeatedly call `list_files` or `get_directory_tree`; inspect structure once and then execute concrete edits.
-
-Recommended workflow:
-
-1. Inspect project
-2. Read relevant files
-3. Modify code
-4. Generate new files if necessary
-5. Verify modifications
-6. Finish
-"""
-
-
-@dataclass
-class AgentContext:
-    messages: list = field(default_factory=list)
-    tool_results: dict = field(default_factory=dict)
-
-    working_directory: str = ""
-    current_task: str = ""
-
-    iteration: int = 0
-    max_iterations: int = 50
-
-
-@dataclass
-class FinishResult:
-    status: str
-    summary: str
-    artifacts: list[str] = None
 
 
 class CodeAgent:
     def __init__(self):
         load_dotenv()
-        # self.model = "llama3.2"  #
-        self.model = "qwen3.6"
+
+        self.config = load_agent_config()
+        self.model = self.config.model
         self.client = OpenAI(
-            base_url=os.getenv("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
-            api_key=os.getenv("OPENAI_API_KEY", "local"),
+            base_url=self.config.openai_base_url,
+            api_key=self.config.openai_api_key,
         )
 
-        # All Tools
-        self.file_system_tools = list(FS_TOOLS)
-        self.file_system_tools.append(
-            {"type": "function", "function": self.__get_finish_definition()}
+        tool_registry = build_tool_registry(
+            finish_fn=self.__get_finish_definition(),
+            plan_finish_fn=self.__get_plan_finish_definition(),
         )
-        self.editing_tools = [
-            tool
-            for tool in self.file_system_tools
-            if tool["function"]["name"] not in {"list_files", "get_directory_tree"}
-        ]
-        self.tool_registrations = dict(TOOL_REGISTRATIONS)
+
+        self.file_system_tools = tool_registry.file_system_tools
+        self.editing_tools = tool_registry.editing_tools
+        self.read_only_file_system_tools = tool_registry.read_only_file_system_tools
+        self.read_only_planning_tools = tool_registry.read_only_planning_tools
+        self.tool_registrations = tool_registry.tool_registrations
         self.tool_registrations["finish"] = self.finish
-
-        # Read Only Tools - Planning Phase
-        self.read_only_file_system_tools = list(FS_READ_ONLY_TOOLS)
-        self.read_only_file_system_tools.append(
-            {"type": "function", "function": self.__get_plan_finish_definition()}
-        )
-        self.read_only_planning_tools = [
-            tool
-            for tool in self.read_only_file_system_tools
-            if tool["function"]["name"] not in {"list_files", "get_directory_tree"}
-        ]
-        self.read_only_tool_registrations = dict(READ_ONLY_TOOL_REGISTRATIONS)
+        self.read_only_tool_registrations = tool_registry.read_only_tool_registrations
         self.read_only_tool_registrations["plan_finish"] = self.plan_finish
 
         self.agent_state_manager = AgentStateManager()
@@ -193,39 +117,6 @@ class CodeAgent:
             tools=tools,
         )
 
-    @staticmethod
-    def _assistant_message_to_dict(message) -> dict:
-        assistant_message = {
-            "role": "assistant",
-            "content": message.content or "",
-        }
-        if message.tool_calls:
-            assistant_message["tool_calls"] = [
-                {
-                    "id": tool_call.id,
-                    "type": tool_call.type,
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
-                    },
-                }
-                for tool_call in message.tool_calls
-            ]
-        return assistant_message
-
-    @staticmethod
-    def _resolve_target_directory(path: str) -> str:
-        candidate = os.path.abspath(path)
-        if os.path.isfile(candidate):
-            return os.path.dirname(candidate)
-        return candidate
-
-    @staticmethod
-    def _truncate_for_context(text: str, max_chars: int = 12000) -> str:
-        if len(text) <= max_chars:
-            return text
-        return text[:max_chars] + "\n... (truncated)"
-
     def _execute_tool(self, tool_call, tool_registrations: dict | None = None):
         tool_name = tool_call.function.name
         args = json.loads(tool_call.function.arguments or "{}")
@@ -242,14 +133,15 @@ class CodeAgent:
     def generate_plan_of_action(self, prompt: str, path: str) -> str:
         self.agent_state_manager.update_state("planning")
 
-        target_dir = self._resolve_target_directory(path)
+        target_dir = resolve_target_directory(path)
         change_dir_result = Shell.change_directory(target_dir)
-        initial_files = self._truncate_for_context(Shell.list_files())
-        initial_tree = self._truncate_for_context(Shell.get_directory_tree())
+        initial_files = truncate_for_context(Shell.list_files())
+        initial_tree = truncate_for_context(Shell.get_directory_tree())
 
         context = AgentContext(
             current_task=prompt,
-            working_directory=os.getcwd(),
+            working_directory=Shell.current_directory,
+            max_iterations=self.config.max_iterations,
         )
         context.messages = [
             {
@@ -278,7 +170,7 @@ class CodeAgent:
             self.agent_state_manager.update_state("planning")
             response = self.__call_llm(context, self.read_only_planning_tools)
             message = response.choices[0].message
-            context.messages.append(self._assistant_message_to_dict(message))
+            context.messages.append(assistant_message_to_dict(message))
 
             if message.content:
                 print(f"LLM Response: {message.content}")
@@ -350,14 +242,15 @@ class CodeAgent:
     def generate_code(self, prompt: str, path: str) -> str:
         self.agent_state_manager.update_state("initializing")
 
-        target_dir = self._resolve_target_directory(path)
+        target_dir = resolve_target_directory(path)
         change_dir_result = Shell.change_directory(target_dir)
-        initial_files = self._truncate_for_context(Shell.list_files())
-        initial_tree = self._truncate_for_context(Shell.get_directory_tree())
+        initial_files = truncate_for_context(Shell.list_files())
+        initial_tree = truncate_for_context(Shell.get_directory_tree())
 
         context = AgentContext(
             current_task=prompt,
-            working_directory=os.getcwd(),
+            working_directory=Shell.current_directory,
+            max_iterations=self.config.max_iterations,
         )
         context.messages = [
             {
@@ -399,7 +292,7 @@ class CodeAgent:
             self.agent_state_manager.update_state("editing")
             response = self.__call_llm(context, self.editing_tools)
             message = response.choices[0].message
-            context.messages.append(self._assistant_message_to_dict(message))
+            context.messages.append(assistant_message_to_dict(message))
 
             if message.content:
                 print(f"LLM Response: {message.content}")
@@ -469,8 +362,14 @@ class CodeAgent:
     def explain_code(self, query: str, path: str) -> str:
         with open(path, "r") as file:
             code_content = file.read()
-        return self.__call_llm(
-            system="You are a helpful assistant that explains code.",
-            user=f"Query: {query}\nCode:\n{code_content}",
-            tools=FS_TOOLS,
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that explains code.",
+                },
+                {"role": "user", "content": f"Query: {query}\nCode:\n{code_content}"},
+            ],
         )
+        return response.choices[0].message.content or ""
