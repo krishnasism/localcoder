@@ -8,14 +8,9 @@ READ_ONLY_TOOL_REGISTRATIONS: dict[str, callable] = {
     "read_file": Shell.read_file,
     "pytest": PythonTools().run_pytest,
     "pytest_with_coverage": PythonTools().run_pytest_with_coverage,
+    "setup_python_virtual_env": PythonTools().setup_python_virtual_env,
 }
 TOOL_REGISTRATIONS: dict[str, callable] = {
-    "change_directory": Shell.change_directory,
-    "list_files": Shell.list_files,
-    "get_directory_tree": Shell.get_directory_tree,
-    "read_file": Shell.read_file,
-    "pytest": PythonTools().run_pytest,
-    "pytest_with_coverage": PythonTools().run_pytest_with_coverage,
     "sed": Shell.sed,
     "write_file": Shell.write_file,
     "find_files": Shell.find_files,
@@ -28,6 +23,8 @@ TOOL_REGISTRATIONS: dict[str, callable] = {
     "append_to_file": Shell.append_to_file,
     "run_shell_command": Shell.run_shell_command,
 }
+
+TOOL_REGISTRATIONS.update(READ_ONLY_TOOL_REGISTRATIONS)
 
 FS_READ_ONLY_TOOLS = [
     {
@@ -119,6 +116,23 @@ FS_READ_ONLY_TOOLS = [
                     }
                 },
                 "required": ["test_file_or_folder"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_python_virtual_env",
+            "description": "Set up a Python virtual environment and install dependencies.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "env_name": {
+                        "type": "string",
+                        "description": "The name of the virtual environment to create.",
+                    }
+                },
+                "required": ["env_name"],
             },
         },
     },

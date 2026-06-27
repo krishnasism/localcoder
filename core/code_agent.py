@@ -117,16 +117,59 @@ class CodeAgent:
             tools=tools,
         )
 
-    def _execute_tool(self, tool_call, tool_registrations: dict | None = None):
+    @staticmethod
+    def _safe_load_tool_args(raw_arguments: str | None) -> dict:
+        if not raw_arguments:
+            return {}
+        try:
+            data = json.loads(raw_arguments)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    @staticmethod
+    def _allowed_tool_names(tools: list) -> set[str]:
+        return {tool["function"]["name"] for tool in tools}
+
+    @staticmethod
+    def _looks_like_plan(text: str) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        has_steps = "1." in text or "- " in text or "step" in lowered
+        has_intent = any(
+            keyword in lowered
+            for keyword in ["plan", "test", "coverage", "refactor", "create", "update"]
+        )
+        return has_steps and has_intent
+
+    @staticmethod
+    def _fallback_plan(prompt: str) -> str:
+        return (
+            f"Task focus: {prompt}"
+        )
+
+    def _execute_tool(
+        self,
+        tool_call,
+        tool_registrations: dict | None = None,
+        allowed_tool_names: set[str] | None = None,
+    ):
         tool_name = tool_call.function.name
-        args = json.loads(tool_call.function.arguments or "{}")
+        args = self._safe_load_tool_args(tool_call.function.arguments)
 
         print(f"Running tool: {tool_name}")
+
+        if allowed_tool_names is not None and tool_name not in allowed_tool_names:
+            return (
+                f"Tool '{tool_name}' is not allowed in this phase. "
+                f"Allowed tools: {', '.join(sorted(allowed_tool_names))}"
+            )
 
         fn = (tool_registrations or self.tool_registrations).get(tool_name)
 
         if fn is None:
-            raise ValueError(f"Unknown tool '{tool_name}'")
+            return f"Unknown tool '{tool_name}'"
 
         return fn(**args)
 
@@ -162,7 +205,9 @@ class CodeAgent:
             },
         ]
 
+        allowed_planning_tools = self._allowed_tool_names(self.read_only_planning_tools)
         consecutive_structure_only_iterations = 0
+        stagnant_iterations = 0
 
         while context.iteration < context.max_iterations:
             context.iteration += 1
@@ -176,6 +221,7 @@ class CodeAgent:
                 print(f"LLM Response: {message.content}")
 
             tool_names = []
+            iteration_had_progress = False
             for tool_call in message.tool_calls or []:
                 tool_names.append(tool_call.function.name)
                 if tool_call.function.name == "plan_finish":
@@ -184,9 +230,15 @@ class CodeAgent:
                     return message.content or "Planning completed."
                 try:
                     result = self._execute_tool(
-                        tool_call, self.read_only_tool_registrations
+                        tool_call,
+                        self.read_only_tool_registrations,
+                        allowed_tool_names=allowed_planning_tools,
                     )
                     context.tool_results[tool_call.id] = result
+                    if not str(result).startswith("Tool '") and not str(result).startswith(
+                        "Unknown tool"
+                    ):
+                        iteration_had_progress = True
                     context.messages.append(
                         {
                             "role": "tool",
@@ -206,6 +258,35 @@ class CodeAgent:
                             "tool_call_id": tool_call.id,
                         }
                     )
+
+            if (
+                message.content
+                and not (message.tool_calls or [])
+                and self._looks_like_plan(message.content)
+            ):
+                self.plan_finish(summary=message.content)
+                return message.content
+
+            if iteration_had_progress:
+                stagnant_iterations = 0
+            else:
+                stagnant_iterations += 1
+
+            if stagnant_iterations >= 4:
+                context.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You are looping. Stop exploring. Produce a concise plan now and call plan_finish. "
+                            "Do not call tools unless strictly necessary."
+                        ),
+                    }
+                )
+
+            if stagnant_iterations >= 8:
+                fallback = self._fallback_plan(prompt)
+                self.plan_finish(summary=fallback)
+                return fallback
 
             if tool_names and set(tool_names).issubset(
                 {"list_files", "get_directory_tree"}
@@ -284,7 +365,9 @@ class CodeAgent:
             }
         )
 
+        allowed_editing_tools = self._allowed_tool_names(self.editing_tools)
         consecutive_structure_only_iterations = 0
+        stagnant_iterations = 0
 
         while context.iteration < context.max_iterations:
             context.iteration += 1
@@ -298,6 +381,7 @@ class CodeAgent:
                 print(f"LLM Response: {message.content}")
 
             tool_names = []
+            iteration_had_progress = False
             for tool_call in message.tool_calls or []:
                 tool_names.append(tool_call.function.name)
                 if tool_call.function.name == "finish":
@@ -305,8 +389,16 @@ class CodeAgent:
                     self.agent_state_manager.update_state("completed")
                     return message.content or "Task completed."
                 try:
-                    result = self._execute_tool(tool_call, self.tool_registrations)
+                    result = self._execute_tool(
+                        tool_call,
+                        self.tool_registrations,
+                        allowed_tool_names=allowed_editing_tools,
+                    )
                     context.tool_results[tool_call.id] = result
+                    if not str(result).startswith("Tool '") and not str(result).startswith(
+                        "Unknown tool"
+                    ):
+                        iteration_had_progress = True
                     context.messages.append(
                         {
                             "role": "tool",
@@ -326,6 +418,22 @@ class CodeAgent:
                             "tool_call_id": tool_call.id,
                         }
                     )
+
+            if iteration_had_progress:
+                stagnant_iterations = 0
+            else:
+                stagnant_iterations += 1
+
+            if stagnant_iterations >= 5:
+                context.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You are looping. Execute concrete file edits immediately and then call finish. "
+                            "Do not repeat exploration."
+                        ),
+                    }
+                )
 
             if tool_names and set(tool_names).issubset(
                 {"list_files", "get_directory_tree"}
