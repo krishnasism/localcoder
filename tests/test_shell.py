@@ -101,7 +101,7 @@ class TestShellFileOperations:
             assert os.path.isdir(os.path.join(td, dirname))
 
             # Create a file inside the subdir and read it via Shell
-            shell_path = os.path.join("..", dirname, "inner.txt")
+            shell_path = os.path.join(dirname, "inner.txt")
             Shell.write_file(shell_path, "inside nested dir")
             result = Shell.read_file(shell_path)
             assert result == "inside nested dir"
