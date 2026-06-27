@@ -1,13 +1,8 @@
 # Local Coder
 
-## Setup
-
-Setup Python
-# Local Coder
-
 Trying out coding with Agents..
 
-It has two phases:
+Two phases:
 - **Planning**: reads project context and creates a plan.
 - **Editing**: executes code changes using filesystem tools.
 
