@@ -48,6 +48,7 @@ Rules:
 - Continue working until the task is complete.
 - Only finish once the requested modification has been made.
 - IMPORTANT: when the task is complete, you MUST call the `finish` tool with a concise summary.
+- Do not repeatedly call `list_files` or `get_directory_tree`; inspect structure once and then execute concrete edits.
 
 Recommended workflow:
 
@@ -94,6 +95,11 @@ class CodeAgent:
         self.file_system_tools.append(
             {"type": "function", "function": self.__get_finish_definition()}
         )
+        self.editing_tools = [
+            tool
+            for tool in self.file_system_tools
+            if tool["function"]["name"] not in {"list_files", "get_directory_tree"}
+        ]
         self.tool_registrations = dict(TOOL_REGISTRATIONS)
         self.tool_registrations["finish"] = self.finish
 
@@ -345,7 +351,9 @@ class CodeAgent:
         self.agent_state_manager.update_state("initializing")
 
         target_dir = self._resolve_target_directory(path)
-        Shell.change_directory(target_dir)
+        change_dir_result = Shell.change_directory(target_dir)
+        initial_files = self._truncate_for_context(Shell.list_files())
+        initial_tree = self._truncate_for_context(Shell.get_directory_tree())
 
         context = AgentContext(
             current_task=prompt,
@@ -356,26 +364,49 @@ class CodeAgent:
                 "role": "system",
                 "content": SYSTEM_PROMPT,
             },
-            {"role": "user", "content": f"{prompt}\nTarget file: {path}"},
+            {
+                "role": "user",
+                "content": (
+                    f"{prompt}\n"
+                    f"Target file: {path}\n"
+                    f"Directory setup: {change_dir_result}\n"
+                    f"Current working directory: {Shell.current_directory}\n\n"
+                    "Initial project snapshot (already gathered; do not call list_files/get_directory_tree again):\n"
+                    f"Files:\n{initial_files}\n\n"
+                    f"Tree:\n{initial_tree}"
+                ),
+            },
         ]
 
         plan = self.generate_plan_of_action(prompt, path)
         print(f"Plan of Action:\n{plan}")
         context.messages.append(
-            {"role": "assistant", "content": f"Plan of Action: {plan}"}
+            {
+                "role": "user",
+                "content": (
+                    "Approved plan to execute:\n"
+                    f"{plan}\n"
+                    "Now perform the edits and call finish when done."
+                ),
+            }
         )
+
+        consecutive_structure_only_iterations = 0
+
         while context.iteration < context.max_iterations:
             context.iteration += 1
             print(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state("editing")
-            response = self.__call_llm(context, self.file_system_tools)
+            response = self.__call_llm(context, self.editing_tools)
             message = response.choices[0].message
             context.messages.append(self._assistant_message_to_dict(message))
 
             if message.content:
                 print(f"LLM Response: {message.content}")
 
+            tool_names = []
             for tool_call in message.tool_calls or []:
+                tool_names.append(tool_call.function.name)
                 if tool_call.function.name == "finish":
                     print("Task completed successfully.")
                     self.agent_state_manager.update_state("completed")
@@ -402,6 +433,32 @@ class CodeAgent:
                             "tool_call_id": tool_call.id,
                         }
                     )
+
+            if tool_names and set(tool_names).issubset(
+                {"list_files", "get_directory_tree"}
+            ):
+                consecutive_structure_only_iterations += 1
+            else:
+                consecutive_structure_only_iterations = 0
+
+            if consecutive_structure_only_iterations >= 3:
+                context.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Stop repeating structure inspection. "
+                            "Use the provided plan and perform concrete file edits now. "
+                            "Then call finish."
+                        ),
+                    }
+                )
+
+            if consecutive_structure_only_iterations >= 6:
+                self.agent_state_manager.update_state("error")
+                raise RuntimeError(
+                    "Editing is stuck in repeated list_files/get_directory_tree calls. "
+                    "Aborting to avoid an infinite loop."
+                )
 
         self.agent_state_manager.update_state("error")
         raise RuntimeError(
