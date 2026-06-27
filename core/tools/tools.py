@@ -1,11 +1,34 @@
 from core.tools.shell import Shell
+from core.tools.python import PythonTools
 
 READ_ONLY_TOOL_REGISTRATIONS: dict[str, callable] = {
     "change_directory": Shell.change_directory,
     "list_files": Shell.list_files,
     "get_directory_tree": Shell.get_directory_tree,
     "read_file": Shell.read_file,
+    "pytest": PythonTools().run_pytest,
+    "pytest_with_coverage": PythonTools().run_pytest_with_coverage,
 }
+TOOL_REGISTRATIONS: dict[str, callable] = {
+    "change_directory": Shell.change_directory,
+    "list_files": Shell.list_files,
+    "get_directory_tree": Shell.get_directory_tree,
+    "read_file": Shell.read_file,
+    "pytest": PythonTools().run_pytest,
+    "pytest_with_coverage": PythonTools().run_pytest_with_coverage,
+    "sed": Shell.sed,
+    "write_file": Shell.write_file,
+    "find_files": Shell.find_files,
+    "search_text_in_files": Shell.search_text_in_files,
+    "mkdir": Shell.mkdir,
+    "delete_file": Shell.delete_file,
+    "move_file": Shell.move_file,
+    "copy_file": Shell.copy_file,
+    "move_file_to_directory": Shell.move_file_to_directory,
+    "append_to_file": Shell.append_to_file,
+    "run_shell_command": Shell.run_shell_command,
+}
+
 FS_READ_ONLY_TOOLS = [
     {
         "type": "function",
@@ -65,84 +88,43 @@ FS_READ_ONLY_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "pytest",
+            "description": "Run pytest on a specified test file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "test_file_or_folder": {
+                        "type": "string",
+                        "description": "The test file or folder to run with pytest.",
+                    }
+                },
+                "required": ["test_file_or_folder"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pytest_with_coverage",
+            "description": "Run pytest with coverage on a specified test file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "test_file_or_folder": {
+                        "type": "string",
+                        "description": "The test file or folder to run with pytest and coverage.",
+                    }
+                },
+                "required": ["test_file_or_folder"],
+            },
+        },
+    },
 ]
-TOOL_REGISTRATIONS: dict[str, callable] = {
-    "change_directory": Shell.change_directory,
-    "list_files": Shell.list_files,
-    "get_directory_tree": Shell.get_directory_tree,
-    "read_file": Shell.read_file,
-    "sed": Shell.sed,
-    "write_file": Shell.write_file,
-    "find_files": Shell.find_files,
-    "search_text_in_files": Shell.search_text_in_files,
-    "mkdir": Shell.mkdir,
-    "delete_file": Shell.delete_file,
-    "move_file": Shell.move_file,
-    "copy_file": Shell.copy_file,
-    "move_file_to_directory": Shell.move_file_to_directory,
-    "append_to_file": Shell.append_to_file,
-    "run_shell_command": Shell.run_shell_command,
-}
 
-FS_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "change_directory",
-            "description": "Change the current working directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path to change the current working directory to.",
-                    }
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_files",
-            "description": "List all files in the current working directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_directory_tree",
-            "description": "Get a tree representation of the current working directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read the contents of a file in the current working directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {
-                        "type": "string",
-                        "description": "The name of the file to read.",
-                    }
-                },
-                "required": ["filename"],
-            },
-        },
-    },
+FS_TOOLS = FS_READ_ONLY_TOOLS + [
     {
         "type": "function",
         "function": {
