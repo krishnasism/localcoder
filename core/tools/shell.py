@@ -62,3 +62,12 @@ class Shell:
             return f"Replaced '{old_string}' with '{new_string}' in {filename}"
         except Exception as e:
             return f"Error performing sed operation: {str(e)}"
+
+    @staticmethod
+    def write_file(filename: str, content: str) -> str:
+        try:
+            with open(os.path.join(Shell.current_directory, filename), "w") as file:
+                file.write(content)
+            return f"Wrote content to {filename}"
+        except Exception as e:
+            return f"Error writing to file: {str(e)}"

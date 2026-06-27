@@ -5,7 +5,9 @@ from core.code_agent import CodeAgent
 def main():
     parser = argparse.ArgumentParser(description="Explain code using CodeAgent")
 
-    parser.add_argument("command", help="Command to run (currently only: explain_code)")
+    parser.add_argument(
+        "command", help="Command to run (supported: explain_code, generate_code)"
+    )
 
     parser.add_argument("--query", required=True, help="Enter your query")
 
@@ -19,8 +21,7 @@ def main():
         print(explanation)
     elif args.command == "generate_code":
         agent = CodeAgent()
-        generated_code = agent.generate_code(args.query)
-        print(generated_code) 
+        agent.generate_code(args.query, args.path)
     else:
         print(f"Unknown command: {args.command}")
 

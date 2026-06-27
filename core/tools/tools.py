@@ -6,6 +6,7 @@ TOOL_REGISTRATIONS = {
     "get_directory_tree": Shell.get_directory_tree,
     "read_file": Shell.read_file,
     "sed": Shell.sed,
+    "write_file": Shell.write_file,
 }
 
 FS_TOOLS = [
@@ -97,6 +98,27 @@ FS_TOOLS = [
                     },
                 },
                 "required": ["filename", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file in the current working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The name of the file to write to.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file.",
+                    },
+                },
+                "required": ["filename", "content"],
             },
         },
     },
