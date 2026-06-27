@@ -16,13 +16,11 @@ You are an autonomous software engineer.
 Your objective is to modify the user's project. However this step is only the planning step. You will only generate a plan first.
 Rules:
 - Never assume file contents.
-- Always inspect the project first before planning.
-- Read files before planning changes.
+- Always inspect the project first before planning. Do not inspect too much. Start to plan as soon as you have enough information.
+- Priority is to finish the plan. This provides a clear path to the next agent.
 - Plan minimal edits.
 - Use available tools whenever needed.
-- Verify your changes after planning.
-- Continue working until the task is complete.
-- Only finish once the requested plan has been made.
+- IMPORTANT: when the plan is ready, you MUST call the `plan_finish` tool with a concise summary.
 
 Recommended workflow:
 
@@ -48,6 +46,7 @@ Rules:
 - Verify your changes after editing.
 - Continue working until the task is complete.
 - Only finish once the requested modification has been made.
+- IMPORTANT: when the task is complete, you MUST call the `finish` tool with a concise summary.
 
 Recommended workflow:
 
@@ -69,7 +68,7 @@ class AgentContext:
     current_task: str = ""
 
     iteration: int = 0
-    max_iterations: int = 20
+    max_iterations: int = 50
 
 
 @dataclass
@@ -216,7 +215,7 @@ class CodeAgent:
             self.agent_state_manager.update_state("planning")
             response = self.__call_llm(context, self.read_only_file_system_tools)
             message = response.choices[0].message
-            context.messages.append(message)
+            context.messages.append(message.model_dump())
 
             if message.content:
                 print(f"LLM Response: {message.content}")
@@ -225,7 +224,7 @@ class CodeAgent:
                 if tool_call.function.name == "plan_finish":
                     print("Plan finished successfully.")
                     self.agent_state_manager.update_state("planning_completed")
-                    return message.content
+                    return message.content or "Planning completed."
                 try:
                     result = self._execute_tool(
                         tool_call, self.read_only_tool_registrations
@@ -250,6 +249,12 @@ class CodeAgent:
                             "tool_call_id": tool_call.id,
                         }
                     )
+
+        self.agent_state_manager.update_state("error")
+        raise RuntimeError(
+            "Planning phase reached max iterations without calling plan_finish. "
+            "Model likely did not emit the required completion tool call."
+        )
 
     def generate_code(self, prompt: str, path: str) -> str:
         self.agent_state_manager.update_state("initializing")
@@ -276,7 +281,7 @@ class CodeAgent:
             self.agent_state_manager.update_state("editing")
             response = self.__call_llm(context, self.file_system_tools)
             message = response.choices[0].message
-            context.messages.append(message)
+            context.messages.append(message.model_dump())
 
             if message.content:
                 print(f"LLM Response: {message.content}")
@@ -285,7 +290,7 @@ class CodeAgent:
                 if tool_call.function.name == "finish":
                     print("Task completed successfully.")
                     self.agent_state_manager.update_state("completed")
-                    return message.content
+                    return message.content or "Task completed."
                 try:
                     result = self._execute_tool(tool_call, self.tool_registrations)
                     context.tool_results[tool_call.id] = result
@@ -308,6 +313,12 @@ class CodeAgent:
                             "tool_call_id": tool_call.id,
                         }
                     )
+
+        self.agent_state_manager.update_state("error")
+        raise RuntimeError(
+            "Editing phase reached max iterations without calling finish. "
+            "Model likely did not emit the required completion tool call."
+        )
 
     def explain_code(self, query: str, path: str) -> str:
         with open(path, "r") as file:

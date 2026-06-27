@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Debug main.py (generate_code)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "generate_code",
+        "--query",
+        "Add a couple of unit tests with pytest to this repository. It is a python project",
+        "--path",
+        "C:\\Users\\Krish\\project\\localcoder"
+      ]
+    }
+  ]
+}

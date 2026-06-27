@@ -120,6 +120,14 @@ class Shell:
     def list_files() -> str:
         try:
             files = os.listdir(Shell.current_directory)
+            # filter out patterns inside gitignore
+            gitignore_path = os.path.join(Shell.current_directory, ".gitignore")
+            if os.path.exists(gitignore_path):
+                with open(gitignore_path, "r") as gitignore_file:
+                    ignored_files = [line.strip() for line in gitignore_file if line.strip()]
+                files = [f for f in files if f not in ignored_files]
+            # filter out files inside .git directory
+            files = [f for f in files if not f.startswith(".git")]
             return "\n".join(files)
         except Exception as e:
             return f"Error listing files: {str(e)}"
