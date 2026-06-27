@@ -309,7 +309,9 @@ class CodeAgent:
                         }
                     )
 
-            if tool_names and set(tool_names).issubset({"list_files", "get_directory_tree"}):
+            if tool_names and set(tool_names).issubset(
+                {"list_files", "get_directory_tree"}
+            ):
                 consecutive_structure_only_iterations += 1
             else:
                 consecutive_structure_only_iterations = 0

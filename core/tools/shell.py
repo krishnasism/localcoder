@@ -124,7 +124,9 @@ class Shell:
             gitignore_path = os.path.join(Shell.current_directory, ".gitignore")
             if os.path.exists(gitignore_path):
                 with open(gitignore_path, "r") as gitignore_file:
-                    ignored_files = [line.strip() for line in gitignore_file if line.strip()]
+                    ignored_files = [
+                        line.strip() for line in gitignore_file if line.strip()
+                    ]
                 files = [f for f in files if f not in ignored_files]
             # filter out files inside .git directory
             files = [f for f in files if not f.startswith(".git")]
