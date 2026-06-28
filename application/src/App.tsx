@@ -207,7 +207,7 @@ export default function App() {
         <header>
           <h1 style={{ margin: 0, fontSize: 28 }}>LocalCoder Chat</h1>
           <p style={{ margin: "8px 0 0", color: "#94a3b8" }}>
-            Submit a path and query, then watch every streamed backend event.
+            Your friendly and cheap AI Assistant.
           </p>
         </header>
 
@@ -270,7 +270,7 @@ export default function App() {
                 fontWeight: 600,
               }}
             >
-              {isStreaming ? "Streaming..." : "Send"}
+              {isStreaming ? "Working..." : "Send"}
             </button>
             <span style={{ color: "#94a3b8", fontSize: 14 }}>
               API: {API_BASE_URL}

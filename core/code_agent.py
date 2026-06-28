@@ -16,8 +16,10 @@ import asyncio
 import inspect
 import json
 from typing import Any, AsyncGenerator, Awaitable, Callable
+import logging
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
+logger = logging.getLogger(__name__)
 
 
 class CodeAgent:
@@ -230,7 +232,7 @@ class CodeAgent:
 
         while context.iteration < context.max_iterations:
             context.iteration += 1
-            print(f"Iteration {context.iteration} of {context.max_iterations}")
+            logger.info(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state("planning")
             await self._emit(
                 on_event,
@@ -254,14 +256,14 @@ class CodeAgent:
                         "content": message.content,
                     },
                 )
-                print(f"LLM Response: {message.content}")
+                logger.info(f"LLM Response: {message.content}")
 
             tool_names = []
             iteration_had_progress = False
             for tool_call in message.tool_calls or []:
                 tool_names.append(tool_call.function.name)
                 if tool_call.function.name == "plan_finish":
-                    print("Plan finished successfully.")
+                    logger.info("Plan finished successfully.")
                     self.agent_state_manager.update_state("planning_completed")
                     summary = message.content or "Planning completed."
                     await self._emit(
@@ -472,7 +474,7 @@ class CodeAgent:
 
         while context.iteration < context.max_iterations:
             context.iteration += 1
-            print(f"Iteration {context.iteration} of {context.max_iterations}")
+            logger.info(f"Iteration {context.iteration} of {context.max_iterations}")
             await self._emit(
                 on_event,
                 {
@@ -496,14 +498,14 @@ class CodeAgent:
                         "content": message.content,
                     },
                 )
-                print(f"LLM Response: {message.content}")
+                logger.info(f"LLM Response: {message.content}")
 
             tool_names = []
             iteration_had_progress = False
             for tool_call in message.tool_calls or []:
                 tool_names.append(tool_call.function.name)
                 if tool_call.function.name == "finish":
-                    print("Task completed successfully.")
+                    logger.info("Task completed successfully.")
                     self.agent_state_manager.update_state("completed")
                     summary = message.content or "Task completed."
                     await self._emit(
