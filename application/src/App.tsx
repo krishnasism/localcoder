@@ -16,6 +16,7 @@ type FeedItem =
       role: "user";
       query: string;
       path: string;
+      model: string;
       createdAt: string;
     }
   | {
@@ -28,6 +29,15 @@ type FeedItem =
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
   "http://127.0.0.1:8000";
+
+const AVAILABLE_MODELS = [
+  "qwen3.6",
+  "qwen2.5",
+  "gpt-4o",
+  "gpt-4o-mini",
+  "claude-3.5-sonnet",
+  "llama-3.1",
+];
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -57,6 +67,7 @@ function formatEventBody(event: StreamEvent) {
 export default function App() {
   const [path, setPath] = useState("C:/Users/Krish/project/localcoder");
   const [query, setQuery] = useState("");
+  const [model, setModel] = useState("qwen3.6");
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +99,7 @@ export default function App() {
         role: "user",
         path: trimmedPath,
         query: trimmedQuery,
+        model: model,
         createdAt: new Date().toISOString(),
       },
     ]);
@@ -101,6 +113,7 @@ export default function App() {
         body: JSON.stringify({
           path: trimmedPath,
           query: trimmedQuery,
+          model: model,
         }),
       });
 
@@ -239,6 +252,28 @@ export default function App() {
           </label>
 
           <label style={{ display: "grid", gap: 6 }}>
+            <span style={{ fontSize: 14, color: "#cbd5e1" }}>Model</span>
+            <select
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              disabled={isStreaming}
+              style={{
+                padding: "12px 14px",
+                borderRadius: 10,
+                border: "1px solid #334155",
+                background: "#020617",
+                color: "#f8fafc",
+              }}
+            >
+              {AVAILABLE_MODELS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: "grid", gap: 6 }}>
             <span style={{ fontSize: 14, color: "#cbd5e1" }}>Query</span>
             <textarea
               value={query}
@@ -314,7 +349,8 @@ export default function App() {
                   }}
                 >
                   <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
-                    You â€¢ {new Date(item.createdAt).toLocaleTimeString()}
+                    You • {new Date(item.createdAt).toLocaleTimeString()}
+                    {" • "}Model: {item.model}
                   </div>
                   <div style={{ fontWeight: 600, marginBottom: 8 }}>{item.query}</div>
                   <div style={{ fontSize: 12, opacity: 0.9 }}>{item.path}</div>

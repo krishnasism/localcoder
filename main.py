@@ -3,19 +3,25 @@ import asyncio
 from core.code_agent import CodeAgent
 
 
-async def explain_code(query, path):
+async def explain_code(query, path, model=None):
     agent = CodeAgent()
+    if model is not None:
+        agent.model = model
     explanation = await agent.explain_code(query, path)
     return explanation
 
 
-async def generate_code(query, path):
+async def generate_code(query, path, model=None):
     agent = CodeAgent()
+    if model is not None:
+        agent.model = model
     await agent.generate_code(query, path)
 
 
-async def generate_code_stream(query, path):
+async def generate_code_stream(query, path, model=None):
     agent = CodeAgent()
+    if model is not None:
+        agent.model = model
     async for event in agent.generate_code_stream(query, path):
         yield event
 
