@@ -2,3 +2,5 @@ openai
 pydantic
 dotenv
 httpx
+fastapi
+uvicorn

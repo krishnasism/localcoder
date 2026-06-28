@@ -2,6 +2,17 @@ import argparse
 from core.code_agent import CodeAgent
 
 
+def explain_code(query, path):
+    agent = CodeAgent()
+    explanation = agent.explain_code(query, path)
+    return explanation
+
+
+def generate_code(query, path):
+    agent = CodeAgent()
+    agent.generate_code(query, path)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Explain code using CodeAgent")
 
@@ -16,12 +27,10 @@ def main():
     args = parser.parse_args()
 
     if args.command == "explain_code":
-        agent = CodeAgent()
-        explanation = agent.explain_code(args.query, args.path)
+        explanation = explain_code(args.query, args.path)
         print(explanation)
     elif args.command == "generate_code":
-        agent = CodeAgent()
-        agent.generate_code(args.query, args.path)
+        generate_code(args.query, args.path)
     else:
         print(f"Unknown command: {args.command}")
 
