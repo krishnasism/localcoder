@@ -461,9 +461,12 @@ class CodeAgent:
             {
                 "role": "user",
                 "content": (
+                    "Original task to complete:\n"
+                    f"{prompt}\n\n"
                     "Approved plan to execute:\n"
                     f"{plan}\n"
-                    "Now perform the edits and call finish when done."
+                    "Planning is complete. Do not ask for the task again. "
+                    "Use the original task and approved plan above, perform the edits, and call finish when done."
                 ),
             }
         )
