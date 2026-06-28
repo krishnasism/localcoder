@@ -33,10 +33,9 @@ const API_BASE_URL =
 const AVAILABLE_MODELS = [
   "qwen3.6",
   "qwen2.5",
-  "gpt-4o",
-  "gpt-4o-mini",
-  "claude-3.5-sonnet",
-  "llama-3.1",
+  "llama-3.2",
+  "llama2-uncensored:7b",
+  "dolphin3:8b",
 ];
 
 function createId() {
@@ -349,8 +348,8 @@ export default function App() {
                   }}
                 >
                   <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
-                    You • {new Date(item.createdAt).toLocaleTimeString()}
-                    {" • "}Model: {item.model}
+                    You ï¿½ {new Date(item.createdAt).toLocaleTimeString()}
+                    {" ï¿½ "}Model: {item.model}
                   </div>
                   <div style={{ fontWeight: 600, marginBottom: 8 }}>{item.query}</div>
                   <div style={{ fontSize: 12, opacity: 0.9 }}>{item.path}</div>
