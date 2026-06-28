@@ -12,12 +12,12 @@ class ExplainCodeRequest(BaseModel):
 
 
 @app.post("/explain_code")
-def explain_code_endpoint(request: ExplainCodeRequest):
-    explanation = explain_code(request.query, request.path)
+async def explain_code_endpoint(request: ExplainCodeRequest):
+    explanation = await explain_code(request.query, request.path)
     return {"explanation": explanation}
 
 
 @app.post("/generate_code")
-def generate_code_endpoint(request: ExplainCodeRequest):
-    generate_code(request.query, request.path)
+async def generate_code_endpoint(request: ExplainCodeRequest):
+    await generate_code(request.query, request.path)
     return {"message": "Code generated successfully"}

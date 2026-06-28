@@ -1,4 +1,4 @@
-from openai import OpenAI
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from core.agent.config import load_agent_config
 from core.agent.models import AgentContext, FinishResult
@@ -12,6 +12,8 @@ from core.agent.utils import (
 from core.tools.shell import Shell
 from core.state.state import AgentStateManager
 from dataclasses import asdict
+import asyncio
+import inspect
 import json
 
 
@@ -21,7 +23,7 @@ class CodeAgent:
 
         self.config = load_agent_config()
         self.model = self.config.model
-        self.client = OpenAI(
+        self.client = AsyncOpenAI(
             base_url=self.config.openai_base_url,
             api_key=self.config.openai_api_key,
         )
@@ -42,7 +44,7 @@ class CodeAgent:
 
         self.agent_state_manager = AgentStateManager()
 
-    def plan_finish(self, summary: str, artifacts: list[str] = None) -> dict:
+    async def plan_finish(self, summary: str, artifacts: list[str] = None) -> dict:
         """
         Called when the agent has completed the planning phase.
         """
@@ -55,7 +57,7 @@ class CodeAgent:
 
         return asdict(result)
 
-    def finish(self, summary: str, artifacts: list[str] = None) -> dict:
+    async def finish(self, summary: str, artifacts: list[str] = None) -> dict:
         """
         Called when the agent has completed the task.
         """
@@ -110,8 +112,8 @@ class CodeAgent:
             },
         }
 
-    def __call_llm(self, context: AgentContext, tools: list) -> str:
-        return self.client.chat.completions.create(
+    async def __call_llm(self, context: AgentContext, tools: list) -> str:
+        return await self.client.chat.completions.create(
             model=self.model,
             messages=context.messages,
             tools=tools,
@@ -147,7 +149,7 @@ class CodeAgent:
     def _fallback_plan(prompt: str) -> str:
         return f"Task focus: {prompt}"
 
-    def _execute_tool(
+    async def _execute_tool(
         self,
         tool_call,
         tool_registrations: dict | None = None,
@@ -169,15 +171,18 @@ class CodeAgent:
         if fn is None:
             return f"Unknown tool '{tool_name}'"
 
-        return fn(**args)
+        result = fn(**args)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
-    def generate_plan_of_action(self, prompt: str, path: str) -> str:
+    async def generate_plan_of_action(self, prompt: str, path: str) -> str:
         self.agent_state_manager.update_state("planning")
 
         target_dir = resolve_target_directory(path)
-        change_dir_result = Shell.change_directory(target_dir)
-        initial_files = truncate_for_context(Shell.list_files())
-        initial_tree = truncate_for_context(Shell.get_directory_tree())
+        change_dir_result = await Shell.change_directory(target_dir)
+        initial_files = truncate_for_context(await Shell.list_files())
+        initial_tree = truncate_for_context(await Shell.get_directory_tree())
 
         context = AgentContext(
             current_task=prompt,
@@ -211,7 +216,7 @@ class CodeAgent:
             context.iteration += 1
             print(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state("planning")
-            response = self.__call_llm(context, self.read_only_planning_tools)
+            response = await self.__call_llm(context, self.read_only_planning_tools)
             message = response.choices[0].message
             context.messages.append(assistant_message_to_dict(message))
 
@@ -227,7 +232,7 @@ class CodeAgent:
                     self.agent_state_manager.update_state("planning_completed")
                     return message.content or "Planning completed."
                 try:
-                    result = self._execute_tool(
+                    result = await self._execute_tool(
                         tool_call,
                         self.read_only_tool_registrations,
                         allowed_tool_names=allowed_planning_tools,
@@ -262,7 +267,7 @@ class CodeAgent:
                 and not (message.tool_calls or [])
                 and self._looks_like_plan(message.content)
             ):
-                self.plan_finish(summary=message.content)
+                await self.plan_finish(summary=message.content)
                 return message.content
 
             if iteration_had_progress:
@@ -283,7 +288,7 @@ class CodeAgent:
 
             if stagnant_iterations >= 8:
                 fallback = self._fallback_plan(prompt)
-                self.plan_finish(summary=fallback)
+                await self.plan_finish(summary=fallback)
                 return fallback
 
             if tool_names and set(tool_names).issubset(
@@ -318,13 +323,13 @@ class CodeAgent:
             "Model likely did not emit the required completion tool call."
         )
 
-    def generate_code(self, prompt: str, path: str) -> str:
+    async def generate_code(self, prompt: str, path: str) -> str:
         self.agent_state_manager.update_state("initializing")
 
         target_dir = resolve_target_directory(path)
-        change_dir_result = Shell.change_directory(target_dir)
-        initial_files = truncate_for_context(Shell.list_files())
-        initial_tree = truncate_for_context(Shell.get_directory_tree())
+        change_dir_result = await Shell.change_directory(target_dir)
+        initial_files = truncate_for_context(await Shell.list_files())
+        initial_tree = truncate_for_context(await Shell.get_directory_tree())
 
         context = AgentContext(
             current_task=prompt,
@@ -350,7 +355,7 @@ class CodeAgent:
             },
         ]
 
-        plan = self.generate_plan_of_action(prompt, path)
+        plan = await self.generate_plan_of_action(prompt, path)
         print(f"Plan of Action:\n{plan}")
         context.messages.append(
             {
@@ -371,7 +376,7 @@ class CodeAgent:
             context.iteration += 1
             print(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state("editing")
-            response = self.__call_llm(context, self.editing_tools)
+            response = await self.__call_llm(context, self.editing_tools)
             message = response.choices[0].message
             context.messages.append(assistant_message_to_dict(message))
 
@@ -387,7 +392,7 @@ class CodeAgent:
                     self.agent_state_manager.update_state("completed")
                     return message.content or "Task completed."
                 try:
-                    result = self._execute_tool(
+                    result = await self._execute_tool(
                         tool_call,
                         self.tool_registrations,
                         allowed_tool_names=allowed_editing_tools,
@@ -465,10 +470,13 @@ class CodeAgent:
             "Model likely did not emit the required completion tool call."
         )
 
-    def explain_code(self, query: str, path: str) -> str:
-        with open(path, "r") as file:
-            code_content = file.read()
-        response = self.client.chat.completions.create(
+    async def explain_code(self, query: str, path: str) -> str:
+        def _read_code() -> str:
+            with open(path, "r") as file:
+                return file.read()
+
+        code_content = await asyncio.to_thread(_read_code)
+        response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {

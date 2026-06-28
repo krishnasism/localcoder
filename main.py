@@ -1,19 +1,20 @@
 import argparse
+import asyncio
 from core.code_agent import CodeAgent
 
 
-def explain_code(query, path):
+async def explain_code(query, path):
     agent = CodeAgent()
-    explanation = agent.explain_code(query, path)
+    explanation = await agent.explain_code(query, path)
     return explanation
 
 
-def generate_code(query, path):
+async def generate_code(query, path):
     agent = CodeAgent()
-    agent.generate_code(query, path)
+    await agent.generate_code(query, path)
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description="Explain code using CodeAgent")
 
     parser.add_argument(
@@ -27,13 +28,13 @@ def main():
     args = parser.parse_args()
 
     if args.command == "explain_code":
-        explanation = explain_code(args.query, args.path)
+        explanation = await explain_code(args.query, args.path)
         print(explanation)
     elif args.command == "generate_code":
-        generate_code(args.query, args.path)
+        await generate_code(args.query, args.path)
     else:
         print(f"Unknown command: {args.command}")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

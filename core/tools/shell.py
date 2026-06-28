@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 
@@ -5,54 +6,65 @@ class Shell:
     current_directory = os.getcwd()
 
     @staticmethod
-    def find_files(pattern: str) -> str:
+    async def find_files(pattern: str) -> str:
         try:
-            matches = []
-            for root, dirs, files in os.walk(Shell.current_directory):
-                for filename in files:
-                    if pattern in filename:
-                        matches.append(os.path.join(root, filename))
-            return "\n".join(matches)
+            def _find() -> str:
+                matches = []
+                for root, dirs, files in os.walk(Shell.current_directory):
+                    for filename in files:
+                        if pattern in filename:
+                            matches.append(os.path.join(root, filename))
+                return "\n".join(matches)
+
+            return await asyncio.to_thread(_find)
         except Exception as e:
             return f"Error finding files: {str(e)}"
 
     @staticmethod
-    def search_text_in_files(pattern: str) -> str:
+    async def search_text_in_files(pattern: str) -> str:
         try:
-            matches = []
-            for root, dirs, files in os.walk(Shell.current_directory):
-                for filename in files:
-                    file_path = os.path.join(root, filename)
-                    with open(file_path, "r", errors="ignore") as file:
-                        for line_number, line in enumerate(file, start=1):
-                            if pattern in line:
-                                matches.append(
-                                    f"{file_path}:{line_number}: {line.strip()}"
-                                )
-            return "\n".join(matches)
+            def _search() -> str:
+                matches = []
+                for root, dirs, files in os.walk(Shell.current_directory):
+                    for filename in files:
+                        file_path = os.path.join(root, filename)
+                        with open(file_path, "r", errors="ignore") as file:
+                            for line_number, line in enumerate(file, start=1):
+                                if pattern in line:
+                                    matches.append(
+                                        f"{file_path}:{line_number}: {line.strip()}"
+                                    )
+                return "\n".join(matches)
+
+            return await asyncio.to_thread(_search)
         except Exception as e:
             return f"Error searching text in files: {str(e)}"
 
     @staticmethod
-    def mkdir(path: str) -> str:
+    async def mkdir(path: str) -> str:
         try:
-            os.makedirs(os.path.join(Shell.current_directory, path), exist_ok=True)
+            await asyncio.to_thread(
+                os.makedirs, os.path.join(Shell.current_directory, path), exist_ok=True
+            )
             return f"Directory '{path}' created successfully."
         except Exception as e:
             return f"Error creating directory: {str(e)}"
 
     @staticmethod
-    def delete_file(filename: str) -> str:
+    async def delete_file(filename: str) -> str:
         try:
-            os.remove(os.path.join(Shell.current_directory, filename))
+            await asyncio.to_thread(
+                os.remove, os.path.join(Shell.current_directory, filename)
+            )
             return f"File '{filename}' deleted successfully."
         except Exception as e:
             return f"Error deleting file: {str(e)}"
 
     @staticmethod
-    def move_file(src: str, dest: str) -> str:
+    async def move_file(src: str, dest: str) -> str:
         try:
-            os.rename(
+            await asyncio.to_thread(
+                os.rename,
                 os.path.join(Shell.current_directory, src),
                 os.path.join(Shell.current_directory, dest),
             )
@@ -61,11 +73,12 @@ class Shell:
             return f"Error moving file: {str(e)}"
 
     @staticmethod
-    def copy_file(src: str, dest: str) -> str:
+    async def copy_file(src: str, dest: str) -> str:
         try:
             import shutil
 
-            shutil.copy(
+            await asyncio.to_thread(
+                shutil.copy,
                 os.path.join(Shell.current_directory, src),
                 os.path.join(Shell.current_directory, dest),
             )
@@ -74,10 +87,15 @@ class Shell:
             return f"Error copying file: {str(e)}"
 
     @staticmethod
-    def move_file_to_directory(src: str, dest_dir: str) -> str:
+    async def move_file_to_directory(src: str, dest_dir: str) -> str:
         try:
-            os.makedirs(os.path.join(Shell.current_directory, dest_dir), exist_ok=True)
-            os.rename(
+            await asyncio.to_thread(
+                os.makedirs,
+                os.path.join(Shell.current_directory, dest_dir),
+                exist_ok=True,
+            )
+            await asyncio.to_thread(
+                os.rename,
                 os.path.join(Shell.current_directory, src),
                 os.path.join(Shell.current_directory, dest_dir, src),
             )
@@ -86,101 +104,126 @@ class Shell:
             return f"Error moving file to directory: {str(e)}"
 
     @staticmethod
-    def append_to_file(filename: str, content: str) -> str:
+    async def append_to_file(filename: str, content: str) -> str:
         try:
-            with open(os.path.join(Shell.current_directory, filename), "a") as file:
-                file.write(content)
+            def _append() -> None:
+                with open(os.path.join(Shell.current_directory, filename), "a") as file:
+                    file.write(content)
+
+            await asyncio.to_thread(_append)
             return f"Appended content to {filename}"
         except Exception as e:
             return f"Error appending to file: {str(e)}"
 
     @staticmethod
-    def run_shell_command(command: str) -> str:
+    async def run_shell_command(command: str) -> str:
         try:
-            import subprocess
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=Shell.current_directory,
+            )
+            stdout, stderr = await process.communicate()
+            stdout_text = stdout.decode(errors="ignore") if stdout else ""
+            stderr_text = stderr.decode(errors="ignore") if stderr else ""
 
-            result = subprocess.run(command, shell=True, capture_output=True, text=True)
-            if result.returncode == 0:
-                return result.stdout
-            else:
-                return f"Error executing command: {result.stderr}"
+            if process.returncode == 0:
+                return stdout_text
+            return f"Error executing command: {stderr_text}"
         except Exception as e:
             return f"Error executing shell command: {str(e)}"
 
     @staticmethod
-    def change_directory(path: str) -> str:
+    async def change_directory(path: str) -> str:
         try:
-            os.chdir(path)
-            Shell.current_directory = os.getcwd()
+            def _chdir() -> str:
+                os.chdir(path)
+                return os.getcwd()
+
+            Shell.current_directory = await asyncio.to_thread(_chdir)
             return f"Changed directory to {Shell.current_directory}"
         except Exception as e:
             return f"Error changing directory: {str(e)}"
 
     @staticmethod
-    def list_files() -> str:
+    async def list_files() -> str:
         try:
-            files = os.listdir(Shell.current_directory)
-            # filter out patterns inside gitignore
-            gitignore_path = os.path.join(Shell.current_directory, ".gitignore")
-            if os.path.exists(gitignore_path):
-                with open(gitignore_path, "r") as gitignore_file:
-                    ignored_files = [
-                        line.strip() for line in gitignore_file if line.strip()
-                    ]
-                files = [f for f in files if f not in ignored_files]
-            # filter out files inside .git directory
-            files = [f for f in files if not f.startswith(".git")]
-            return "\n".join(files)
+            def _list() -> str:
+                files = os.listdir(Shell.current_directory)
+                gitignore_path = os.path.join(Shell.current_directory, ".gitignore")
+                if os.path.exists(gitignore_path):
+                    with open(gitignore_path, "r") as gitignore_file:
+                        ignored_files = [
+                            line.strip() for line in gitignore_file if line.strip()
+                        ]
+                    files = [f for f in files if f not in ignored_files]
+                files = [f for f in files if not f.startswith(".git")]
+                return "\n".join(files)
+
+            return await asyncio.to_thread(_list)
         except Exception as e:
             return f"Error listing files: {str(e)}"
 
     @staticmethod
-    def get_directory_tree() -> str:
+    async def get_directory_tree() -> str:
         try:
-            tree = []
-            for root, dirs, files in os.walk(Shell.current_directory):
-                level = root.replace(Shell.current_directory, "").count(os.sep)
-                indent = " " * 4 * level
-                tree.append(f"{indent}{os.path.basename(root)}/")
-                subindent = " " * 4 * (level + 1)
-                for f in files:
-                    tree.append(f"{subindent}{f}")
-            return "\n".join(tree)
+            def _tree() -> str:
+                tree = []
+                for root, dirs, files in os.walk(Shell.current_directory):
+                    level = root.replace(Shell.current_directory, "").count(os.sep)
+                    indent = " " * 4 * level
+                    tree.append(f"{indent}{os.path.basename(root)}/")
+                    subindent = " " * 4 * (level + 1)
+                    for f in files:
+                        tree.append(f"{subindent}{f}")
+                return "\n".join(tree)
+
+            return await asyncio.to_thread(_tree)
         except Exception as e:
             return f"Error generating directory tree: {str(e)}"
 
     @staticmethod
-    def read_file(filename: str) -> str:
+    async def read_file(filename: str) -> str:
         try:
-            with open(os.path.join(Shell.current_directory, filename), "r") as file:
-                return file.read()
+            def _read() -> str:
+                with open(os.path.join(Shell.current_directory, filename), "r") as file:
+                    return file.read()
+
+            return await asyncio.to_thread(_read)
         except Exception as e:
             return f"Error reading file: {str(e)}"
 
     @staticmethod
-    def sed(filename: str, old_string: str, new_string: str, line: int = None) -> str:
+    async def sed(filename: str, old_string: str, new_string: str, line: int = None) -> str:
         try:
-            file_path = os.path.join(Shell.current_directory, filename)
-            with open(file_path, "r") as file:
-                content = file.read()
-            if line is not None:
-                lines = content.split("\n")
-                if 0 <= line - 1 < len(lines):
-                    lines[line - 1] = lines[line - 1].replace(old_string, new_string)
-                content = "\n".join(lines)
-            else:
-                content = content.replace(old_string, new_string)
-            with open(file_path, "w") as file:
-                file.write(content)
+            def _sed() -> None:
+                file_path = os.path.join(Shell.current_directory, filename)
+                with open(file_path, "r") as file:
+                    content = file.read()
+                if line is not None:
+                    lines = content.split("\n")
+                    if 0 <= line - 1 < len(lines):
+                        lines[line - 1] = lines[line - 1].replace(old_string, new_string)
+                    content = "\n".join(lines)
+                else:
+                    content = content.replace(old_string, new_string)
+                with open(file_path, "w") as file:
+                    file.write(content)
+
+            await asyncio.to_thread(_sed)
             return f"Replaced '{old_string}' with '{new_string}' in {filename}"
         except Exception as e:
             return f"Error performing sed operation: {str(e)}"
 
     @staticmethod
-    def write_file(filename: str, content: str) -> str:
+    async def write_file(filename: str, content: str) -> str:
         try:
-            with open(os.path.join(Shell.current_directory, filename), "w") as file:
-                file.write(content)
+            def _write() -> None:
+                with open(os.path.join(Shell.current_directory, filename), "w") as file:
+                    file.write(content)
+
+            await asyncio.to_thread(_write)
             return f"Wrote content to {filename}"
         except Exception as e:
             return f"Error writing to file: {str(e)}"
