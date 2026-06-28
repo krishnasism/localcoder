@@ -190,11 +190,16 @@ class Shell:
             return f"Error generating directory tree: {str(e)}"
 
     @staticmethod
-    async def read_file(filename: str) -> str:
+    async def read_file(filename: str, line: int = None) -> str:
         try:
 
             def _read() -> str:
                 with open(os.path.join(Shell.current_directory, filename), "r") as file:
+                    if line is not None:
+                        lines = file.readlines()
+                        if 0 <= line - 1 < len(lines):
+                            return lines[line - 1]
+                        return ""
                     return file.read()
 
             return await asyncio.to_thread(_read)

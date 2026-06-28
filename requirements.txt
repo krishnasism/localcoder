@@ -1,6 +1,6 @@
 openai
 pydantic
 dotenv
-httpx
+httpx2
 fastapi
 uvicorn

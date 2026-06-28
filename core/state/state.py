@@ -1,3 +1,7 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
 class AgentStateManager:
     def __init__(self):
         self.state = "idle"  # Default state
@@ -20,9 +24,9 @@ class AgentStateManager:
     def update_state(self, new_state: str) -> None:
         if new_state in self.get_code_editing_states():
             self.state = new_state
-            print(f"Agent state updated to: {new_state}")
+            logger.info(f"Agent state updated to: {new_state}")
         else:
-            print(f"Invalid state: {new_state}")
+            logger.warning(f"Invalid state: {new_state}")
 
     def get_current_state(self) -> str:
         return self.state

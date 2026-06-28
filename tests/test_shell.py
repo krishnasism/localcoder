@@ -354,6 +354,15 @@ class TestShellNonFileOperations:
         finally:
             self._restore(original_dir)
 
+    def test_read_file_line_error(self):
+        """read_file should return an error message for non-existent file."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            result = asyncio.run(Shell.read_file("nonexistent.txt", line=1))
+            assert "Error reading file" in result
+        finally:
+            self._restore(original_dir)
+
     def test_delete_file_error(self):
         """delete_file should return an error for non-existent file."""
         td, original_dir = self._chdir_to_temp()
@@ -443,5 +452,29 @@ class TestShellNonFileOperations:
         try:
             result = asyncio.run(Shell.move_file_to_directory("ghost.txt", "target_dir"))
             assert "Error moving file to directory" in result
+        finally:
+            self._restore(original_dir)
+
+    def test_read_file(self):
+        """read_file should return the content of an existing file."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            filename = "read_test.txt"
+            content = "This is a test for read_file."
+            asyncio.run(Shell.write_file(filename, content))
+            result = asyncio.run(Shell.read_file(filename))
+            assert result == content
+        finally:
+            self._restore(original_dir)
+
+    def test_read_file_line(self):
+        """read_file with line parameter should return the specific line."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            filename = "line_test.txt"
+            content = "first line\nsecond line\nthird line\n"
+            asyncio.run(Shell.write_file(filename, content))
+            result = asyncio.run(Shell.read_file(filename, line=2))
+            assert result.strip().strip("\n") == "second line"
         finally:
             self._restore(original_dir)
