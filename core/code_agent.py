@@ -439,7 +439,7 @@ class CodeAgent:
                 "content": (
                     f"{prompt}\n"
                     f"Target file: {path}\n"
-                    f"Directory setup: {change_dir_result}\n"
+                    f"DirTectory setup: {change_dir_result}\n"
                     f"Current working directory: {Shell.current_directory}\n\n"
                     "Initial project snapshot (already gathered; do not call list_files/get_directory_tree again):\n"
                     f"Files:\n{initial_files}\n\n"

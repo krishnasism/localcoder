@@ -5,20 +5,21 @@ import asyncio
 class PythonTools:
     async def setup_python_virtual_env(self, env_name: str) -> str:
         try:
-            await Shell.run_shell_command(f"python -m venv {env_name}")
+            venv_prefix = "agent_venv_"
+            await Shell.run_shell_command(f"python -m venv {venv_prefix}{env_name}")
             windows = (
                 await Shell.run_shell_command("echo %OS%")
             ).strip() == "Windows_NT"
             if windows:
-                pip_cmd = f"{env_name}\\Scripts\\python -m pip"
+                pip_cmd = f"{venv_prefix}{env_name}\\Scripts\\python -m pip"
             else:
-                pip_cmd = f"{env_name}/bin/python -m pip"
+                pip_cmd = f"{venv_prefix}{env_name}/bin/python -m pip"
 
             await Shell.run_shell_command(f"{pip_cmd} install --upgrade pip")
             await Shell.run_shell_command(f"{pip_cmd} install pytest pytest-cov")
             await Shell.run_shell_command(f"{pip_cmd} install -r requirements.txt")
 
-            return f"Virtual environment '{env_name}' created successfully."
+            return f"Virtual environment '{venv_prefix}{env_name}' created successfully."
         except Exception as e:
             return f"Error creating virtual environment: {str(e)}"
 
