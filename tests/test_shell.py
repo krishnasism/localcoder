@@ -1,4 +1,5 @@
 import os
+import asyncio
 import tempfile
 from core.tools.shell import Shell
 
@@ -26,16 +27,19 @@ class TestShellFileOperations:
         td, original_dir = self._chdir_to_temp()
         try:
             # Write a file
-            assert Shell.write_file(filename, content) == f"Wrote content to {filename}"
+            assert (
+                asyncio.run(Shell.write_file(filename, content))
+                == f"Wrote content to {filename}"
+            )
             assert os.path.isfile(os.path.join(td, filename))
 
             # Read it back via read_file to verify content
-            result = Shell.read_file(filename)
+            result = asyncio.run(Shell.read_file(filename))
             assert result == content
 
             # Delete the file
             assert (
-                Shell.delete_file(filename)
+                asyncio.run(Shell.delete_file(filename))
                 == f"File '{filename}' deleted successfully."
             )
             assert not os.path.exists(os.path.join(td, filename))
@@ -50,12 +54,12 @@ class TestShellFileOperations:
         td, original_dir = self._chdir_to_temp()
         try:
             # Create source file
-            Shell.write_file(src_name, content)
+            asyncio.run(Shell.write_file(src_name, content))
             assert os.path.isfile(os.path.join(td, src_name))
 
             # Copy
             assert (
-                Shell.copy_file(src_name, dest_name)
+                asyncio.run(Shell.copy_file(src_name, dest_name))
                 == f"File '{src_name}' copied to '{dest_name}' successfully."
             )
             assert os.path.isfile(
@@ -66,14 +70,14 @@ class TestShellFileOperations:
             # Move (rename) the copy
             moved_name = "moved_unit.txt"
             assert (
-                Shell.move_file(dest_name, moved_name)
+                asyncio.run(Shell.move_file(dest_name, moved_name))
                 == f"File '{dest_name}' moved to '{moved_name}' successfully."
             )
             assert not os.path.exists(os.path.join(td, dest_name))  # original copy gone
             assert os.path.isfile(os.path.join(td, moved_name))
 
             # Verify content survived the round-trip
-            assert Shell.read_file(moved_name) == content
+            assert asyncio.run(Shell.read_file(moved_name)) == content
         finally:
             self._restore(original_dir)
 
@@ -81,12 +85,12 @@ class TestShellFileOperations:
         filename = "append_test.txt"
         td, original_dir = self._chdir_to_temp()
         try:
-            Shell.write_file(filename, "line_one\n")
+            asyncio.run(Shell.write_file(filename, "line_one\n"))
             assert (
-                Shell.append_to_file(filename, "line_two\n")
+                asyncio.run(Shell.append_to_file(filename, "line_two\n"))
                 == f"Appended content to {filename}"
             )
-            result = Shell.read_file(filename)
+            result = asyncio.run(Shell.read_file(filename))
             assert result == "line_one\nline_two\n"
         finally:
             self._restore(original_dir)
@@ -96,14 +100,15 @@ class TestShellFileOperations:
         td, original_dir = self._chdir_to_temp()
         try:
             assert (
-                Shell.mkdir(dirname) == f"Directory '{dirname}' created successfully."
+                asyncio.run(Shell.mkdir(dirname))
+                == f"Directory '{dirname}' created successfully."
             )
             assert os.path.isdir(os.path.join(td, dirname))
 
             # Create a file inside the subdir and read it via Shell
             shell_path = os.path.join(dirname, "inner.txt")
-            Shell.write_file(shell_path, "inside nested dir")
-            result = Shell.read_file(shell_path)
+            asyncio.run(Shell.write_file(shell_path, "inside nested dir"))
+            result = asyncio.run(Shell.read_file(shell_path))
             assert result == "inside nested dir"
         finally:
             self._restore(original_dir)

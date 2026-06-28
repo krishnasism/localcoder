@@ -6,7 +6,9 @@ class PythonTools:
     async def setup_python_virtual_env(self, env_name: str) -> str:
         try:
             await Shell.run_shell_command(f"python -m venv {env_name}")
-            windows = (await Shell.run_shell_command("echo %OS%")).strip() == "Windows_NT"
+            windows = (
+                await Shell.run_shell_command("echo %OS%")
+            ).strip() == "Windows_NT"
             if windows:
                 pip_cmd = f"{env_name}\\Scripts\\python -m pip"
             else:

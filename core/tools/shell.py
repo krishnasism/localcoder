@@ -8,6 +8,7 @@ class Shell:
     @staticmethod
     async def find_files(pattern: str) -> str:
         try:
+
             def _find() -> str:
                 matches = []
                 for root, dirs, files in os.walk(Shell.current_directory):
@@ -23,6 +24,7 @@ class Shell:
     @staticmethod
     async def search_text_in_files(pattern: str) -> str:
         try:
+
             def _search() -> str:
                 matches = []
                 for root, dirs, files in os.walk(Shell.current_directory):
@@ -106,6 +108,7 @@ class Shell:
     @staticmethod
     async def append_to_file(filename: str, content: str) -> str:
         try:
+
             def _append() -> None:
                 with open(os.path.join(Shell.current_directory, filename), "a") as file:
                     file.write(content)
@@ -137,6 +140,7 @@ class Shell:
     @staticmethod
     async def change_directory(path: str) -> str:
         try:
+
             def _chdir() -> str:
                 os.chdir(path)
                 return os.getcwd()
@@ -149,6 +153,7 @@ class Shell:
     @staticmethod
     async def list_files() -> str:
         try:
+
             def _list() -> str:
                 files = os.listdir(Shell.current_directory)
                 gitignore_path = os.path.join(Shell.current_directory, ".gitignore")
@@ -168,6 +173,7 @@ class Shell:
     @staticmethod
     async def get_directory_tree() -> str:
         try:
+
             def _tree() -> str:
                 tree = []
                 for root, dirs, files in os.walk(Shell.current_directory):
@@ -186,6 +192,7 @@ class Shell:
     @staticmethod
     async def read_file(filename: str) -> str:
         try:
+
             def _read() -> str:
                 with open(os.path.join(Shell.current_directory, filename), "r") as file:
                     return file.read()
@@ -195,8 +202,11 @@ class Shell:
             return f"Error reading file: {str(e)}"
 
     @staticmethod
-    async def sed(filename: str, old_string: str, new_string: str, line: int = None) -> str:
+    async def sed(
+        filename: str, old_string: str, new_string: str, line: int = None
+    ) -> str:
         try:
+
             def _sed() -> None:
                 file_path = os.path.join(Shell.current_directory, filename)
                 with open(file_path, "r") as file:
@@ -204,7 +214,9 @@ class Shell:
                 if line is not None:
                     lines = content.split("\n")
                     if 0 <= line - 1 < len(lines):
-                        lines[line - 1] = lines[line - 1].replace(old_string, new_string)
+                        lines[line - 1] = lines[line - 1].replace(
+                            old_string, new_string
+                        )
                     content = "\n".join(lines)
                 else:
                     content = content.replace(old_string, new_string)
@@ -219,6 +231,7 @@ class Shell:
     @staticmethod
     async def write_file(filename: str, content: str) -> str:
         try:
+
             def _write() -> None:
                 with open(os.path.join(Shell.current_directory, filename), "w") as file:
                     file.write(content)
