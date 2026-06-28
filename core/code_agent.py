@@ -15,6 +15,9 @@ from dataclasses import asdict
 import asyncio
 import inspect
 import json
+from typing import Any, AsyncGenerator, Awaitable, Callable
+
+EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class CodeAgent:
@@ -43,6 +46,12 @@ class CodeAgent:
         self.read_only_tool_registrations["plan_finish"] = self.plan_finish
 
         self.agent_state_manager = AgentStateManager()
+
+    async def _emit(
+        self, on_event: EventCallback | None, event: dict[str, Any]
+    ) -> None:
+        if on_event is not None:
+            await on_event(event)
 
     async def plan_finish(self, summary: str, artifacts: list[str] = None) -> dict:
         """
@@ -154,11 +163,9 @@ class CodeAgent:
         tool_call,
         tool_registrations: dict | None = None,
         allowed_tool_names: set[str] | None = None,
-    ):
+    ) -> Any:
         tool_name = tool_call.function.name
         args = self._safe_load_tool_args(tool_call.function.arguments)
-
-        print(f"Running tool: {tool_name}")
 
         if allowed_tool_names is not None and tool_name not in allowed_tool_names:
             return (
@@ -176,8 +183,17 @@ class CodeAgent:
             return await result
         return result
 
-    async def generate_plan_of_action(self, prompt: str, path: str) -> str:
+    async def generate_plan_of_action(
+        self,
+        prompt: str,
+        path: str,
+        on_event: EventCallback | None = None,
+    ) -> str:
         self.agent_state_manager.update_state("planning")
+        await self._emit(
+            on_event,
+            {"type": "status", "step": "planning", "message": "Planning started."},
+        )
 
         target_dir = resolve_target_directory(path)
         change_dir_result = await Shell.change_directory(target_dir)
@@ -216,11 +232,28 @@ class CodeAgent:
             context.iteration += 1
             print(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state("planning")
+            await self._emit(
+                on_event,
+                {
+                    "type": "status",
+                    "step": "planning",
+                    "message": f"Planning iteration {context.iteration}/{context.max_iterations}",
+                },
+            )
             response = await self.__call_llm(context, self.read_only_planning_tools)
             message = response.choices[0].message
+
             context.messages.append(assistant_message_to_dict(message))
 
             if message.content:
+                await self._emit(
+                    on_event,
+                    {
+                        "type": "assistant_message",
+                        "step": "planning",
+                        "content": message.content,
+                    },
+                )
                 print(f"LLM Response: {message.content}")
 
             tool_names = []
@@ -230,18 +263,46 @@ class CodeAgent:
                 if tool_call.function.name == "plan_finish":
                     print("Plan finished successfully.")
                     self.agent_state_manager.update_state("planning_completed")
-                    return message.content or "Planning completed."
+                    summary = message.content or "Planning completed."
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "status",
+                            "step": "planning",
+                            "message": "Planning completed.",
+                            "summary": summary,
+                        },
+                    )
+                    return summary
                 try:
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "tool_start",
+                            "step": "planning",
+                            "tool": tool_call.function.name,
+                        },
+                    )
                     result = await self._execute_tool(
                         tool_call,
                         self.read_only_tool_registrations,
                         allowed_tool_names=allowed_planning_tools,
+                    )
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "tool_result",
+                            "step": "planning",
+                            "tool": tool_call.function.name,
+                            "result": str(result),
+                        },
                     )
                     context.tool_results[tool_call.id] = result
                     if not str(result).startswith("Tool '") and not str(
                         result
                     ).startswith("Unknown tool"):
                         iteration_had_progress = True
+
                     context.messages.append(
                         {
                             "role": "tool",
@@ -252,6 +313,14 @@ class CodeAgent:
                 except Exception as e:
                     error_message = (
                         f"Error executing tool '{tool_call.function.name}': {str(e)}"
+                    )
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "error",
+                            "step": "planning",
+                            "message": error_message,
+                        },
                     )
                     self.agent_state_manager.update_state("error")
                     context.messages.append(
@@ -289,6 +358,15 @@ class CodeAgent:
             if stagnant_iterations >= 8:
                 fallback = self._fallback_plan(prompt)
                 await self.plan_finish(summary=fallback)
+                await self._emit(
+                    on_event,
+                    {
+                        "type": "status",
+                        "step": "planning",
+                        "message": "Using fallback plan.",
+                        "summary": fallback,
+                    },
+                )
                 return fallback
 
             if tool_names and set(tool_names).issubset(
@@ -323,7 +401,20 @@ class CodeAgent:
             "Model likely did not emit the required completion tool call."
         )
 
-    async def generate_code(self, prompt: str, path: str) -> str:
+    async def generate_code(
+        self,
+        prompt: str,
+        path: str,
+        on_event: EventCallback | None = None,
+    ) -> str:
+        await self._emit(
+            on_event,
+            {
+                "type": "status",
+                "step": "initializing",
+                "message": "Initializing code generation.",
+            },
+        )
         self.agent_state_manager.update_state("initializing")
 
         target_dir = resolve_target_directory(path)
@@ -355,8 +446,15 @@ class CodeAgent:
             },
         ]
 
-        plan = await self.generate_plan_of_action(prompt, path)
-        print(f"Plan of Action:\n{plan}")
+        plan = await self.generate_plan_of_action(prompt, path, on_event=on_event)
+        await self._emit(
+            on_event,
+            {
+                "type": "plan",
+                "step": "planning",
+                "content": plan,
+            },
+        )
         context.messages.append(
             {
                 "role": "user",
@@ -375,12 +473,29 @@ class CodeAgent:
         while context.iteration < context.max_iterations:
             context.iteration += 1
             print(f"Iteration {context.iteration} of {context.max_iterations}")
+            await self._emit(
+                on_event,
+                {
+                    "type": "status",
+                    "step": "editing",
+                    "message": f"Editing iteration {context.iteration}/{context.max_iterations}",
+                },
+            )
+
             self.agent_state_manager.update_state("editing")
             response = await self.__call_llm(context, self.editing_tools)
             message = response.choices[0].message
             context.messages.append(assistant_message_to_dict(message))
 
             if message.content:
+                await self._emit(
+                    on_event,
+                    {
+                        "type": "assistant_message",
+                        "step": "editing",
+                        "content": message.content,
+                    },
+                )
                 print(f"LLM Response: {message.content}")
 
             tool_names = []
@@ -390,12 +505,39 @@ class CodeAgent:
                 if tool_call.function.name == "finish":
                     print("Task completed successfully.")
                     self.agent_state_manager.update_state("completed")
-                    return message.content or "Task completed."
+                    summary = message.content or "Task completed."
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "status",
+                            "step": "completed",
+                            "message": "Task completed successfully.",
+                            "summary": summary,
+                        },
+                    )
+                    return summary
                 try:
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "tool_start",
+                            "step": "editing",
+                            "tool": tool_call.function.name,
+                        },
+                    )
                     result = await self._execute_tool(
                         tool_call,
                         self.tool_registrations,
                         allowed_tool_names=allowed_editing_tools,
+                    )
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "tool_result",
+                            "step": "editing",
+                            "tool": tool_call.function.name,
+                            "result": str(result),
+                        },
                     )
                     context.tool_results[tool_call.id] = result
                     if not str(result).startswith("Tool '") and not str(
@@ -413,6 +555,14 @@ class CodeAgent:
                     error_message = (
                         f"Error executing tool '{tool_call.function.name}': {str(e)}"
                     )
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "error",
+                            "step": "editing",
+                            "message": error_message,
+                        },
+                    )
                     self.agent_state_manager.update_state("error")
                     context.messages.append(
                         {
@@ -428,6 +578,14 @@ class CodeAgent:
                 stagnant_iterations += 1
 
             if stagnant_iterations >= 5:
+                await self._emit(
+                    on_event,
+                    {
+                        "type": "status",
+                        "step": "editing",
+                        "message": "No progress made in the last 5 iterations.",
+                    },
+                )
                 context.messages.append(
                     {
                         "role": "user",
@@ -446,6 +604,14 @@ class CodeAgent:
                 consecutive_structure_only_iterations = 0
 
             if consecutive_structure_only_iterations >= 3:
+                await self._emit(
+                    on_event,
+                    {
+                        "type": "status",
+                        "step": "editing",
+                        "message": "Repeated structure inspection detected.",
+                    },
+                )
                 context.messages.append(
                     {
                         "role": "user",
@@ -469,6 +635,40 @@ class CodeAgent:
             "Editing phase reached max iterations without calling finish. "
             "Model likely did not emit the required completion tool call."
         )
+
+    async def generate_code_stream(
+        self, prompt: str, path: str
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def _on_event(event: dict[str, Any]) -> None:
+            await queue.put(event)
+
+        task = asyncio.create_task(self.generate_code(prompt, path, on_event=_on_event))
+
+        while True:
+            if task.done() and queue.empty():
+                break
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                yield event
+            except TimeoutError:
+                continue
+
+        try:
+            summary = await task
+            yield {
+                "type": "final",
+                "step": "completed",
+                "message": "Code generation completed.",
+                "summary": summary,
+            }
+        except Exception as e:
+            yield {
+                "type": "error",
+                "step": "completed",
+                "message": str(e),
+            }
 
     async def explain_code(self, query: str, path: str) -> str:
         def _read_code() -> str:

@@ -14,6 +14,12 @@ async def generate_code(query, path):
     await agent.generate_code(query, path)
 
 
+async def generate_code_stream(query, path):
+    agent = CodeAgent()
+    async for event in agent.generate_code_stream(query, path):
+        yield event
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Explain code using CodeAgent")
 
