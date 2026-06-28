@@ -436,13 +436,19 @@ class TestShellNonFileOperations:
 
             # Move it to a new directory (dir should be auto-created)
             result = asyncio.run(Shell.move_file_to_directory(filename, dest_dir))
-            assert f"File '{filename}' moved to directory '{dest_dir}' successfully." == result
+            assert (
+                f"File '{filename}' moved to directory '{dest_dir}' successfully."
+                == result
+            )
             assert not os.path.exists(os.path.join(td, filename))  # original gone
             assert os.path.isdir(os.path.join(td, dest_dir))
             assert os.path.isfile(os.path.join(td, dest_dir, filename))
 
             # Verify content survived the move
-            assert asyncio.run(Shell.read_file(os.path.join(dest_dir, filename))) == content
+            assert (
+                asyncio.run(Shell.read_file(os.path.join(dest_dir, filename)))
+                == content
+            )
         finally:
             self._restore(original_dir)
 
@@ -450,7 +456,9 @@ class TestShellNonFileOperations:
         """move_file_to_directory should return an error for non-existent source."""
         td, original_dir = self._chdir_to_temp()
         try:
-            result = asyncio.run(Shell.move_file_to_directory("ghost.txt", "target_dir"))
+            result = asyncio.run(
+                Shell.move_file_to_directory("ghost.txt", "target_dir")
+            )
             assert "Error moving file to directory" in result
         finally:
             self._restore(original_dir)

@@ -2,6 +2,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class AgentStateManager:
     def __init__(self):
         self.state = "idle"  # Default state

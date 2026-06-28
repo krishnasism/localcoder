@@ -19,7 +19,9 @@ class PythonTools:
             await Shell.run_shell_command(f"{pip_cmd} install pytest pytest-cov")
             await Shell.run_shell_command(f"{pip_cmd} install -r requirements.txt")
 
-            return f"Virtual environment '{venv_prefix}{env_name}' created successfully."
+            return (
+                f"Virtual environment '{venv_prefix}{env_name}' created successfully."
+            )
         except Exception as e:
             return f"Error creating virtual environment: {str(e)}"
 
