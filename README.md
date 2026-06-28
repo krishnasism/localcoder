@@ -69,6 +69,32 @@ You can override model/limits via:
 
 ## Usage
 
+### Run backend API
+
+Start the FastAPI server from the project root:
+
+```sh
+uvicorn api:app --reload
+```
+
+The frontend streaming UI expects the API at `http://127.0.0.1:8000` by default.
+
+### Run frontend app
+
+Open a second terminal and start the Electron + Vite app:
+
+```sh
+cd application
+npm install
+npm run dev
+```
+
+This opens the desktop app with a simple chat interface where you can enter:
+- `path`
+- `query`
+
+and watch streamed agent events in real time.
+
 ### Generate code
 
 ```sh
