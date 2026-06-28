@@ -1,5 +1,8 @@
+import logging
 import os
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -18,8 +21,10 @@ def load_agent_config() -> AgentConfig:
     model = _getenv("LOCALCODER_MODEL", "qwen3.6")
     openai_base_url = _getenv("OPENAI_API_BASE_URL", "http://localhost:11434/v1")
     openai_api_key = _getenv("OPENAI_API_KEY", "local")
-    max_iterations_str = _getenv("LOCALCODER_MAX_ITERATIONS", "50")
-
+    max_iterations_str = _getenv("LOCALCODER_MAX_ITERATIONS", "100")
+    logger.info(
+        f"Loaded agent config: model={model}, openai_base_url={openai_base_url}, max_iterations={max_iterations_str}"
+    )
     return AgentConfig(
         model=model,
         openai_base_url=openai_base_url,
