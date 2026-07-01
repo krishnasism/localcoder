@@ -111,11 +111,12 @@ def test_monitoring_stream_endpoint(monkeypatch):
 
 
 def test_monitoring_analyze_stream_endpoint(monkeypatch):
-    async def _fake_analyze(command, logs, cwd=None, model=None):
+    async def _fake_analyze(command, logs, cwd=None, model=None, context=None):
         assert command == "tail -f app.log"
         assert "line-1" in logs
         assert cwd == "repo"
         assert model == "qwen3.6"
+        assert context == "API returns 500 on login"
         yield {"type": "insight_delta", "content": "Looks healthy."}
         yield {"type": "insight_done"}
 
@@ -128,6 +129,7 @@ def test_monitoring_analyze_stream_endpoint(monkeypatch):
             "logs": "line-1\n",
             "cwd": "repo",
             "model": "qwen3.6",
+            "context": "API returns 500 on login",
         },
     )
 

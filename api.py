@@ -47,6 +47,7 @@ class MonitoringAnalyzeRequest(BaseModel):
     logs: str
     cwd: str | None = None
     model: str | None = None
+    context: str | None = None
 
 
 @app.post("/explain_code")
@@ -97,6 +98,7 @@ async def monitoring_analyze_stream_endpoint(request: MonitoringAnalyzeRequest):
             request.logs,
             cwd=request.cwd,
             model=request.model,
+            context=request.context,
         ):
             yield f"data: {json.dumps(event)}\n\n"
 

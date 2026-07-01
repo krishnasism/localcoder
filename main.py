@@ -108,8 +108,10 @@ async def execute_shell_command(command: str, cwd: str | None = None):
 
 MONITORING_SYSTEM_PROMPT = """You are a local monitoring assistant helping the user watch shell command output in real time.
 
-Given the command being run and the live output so far, respond with:
-1. What the command does and what signals to watch for
+The user may provide debugging context describing what they are investigating. Use that context to focus your analysis on what matters for their goal.
+
+Given the command being run, debugging context, and the live output so far, respond with:
+1. What the command does and what signals to watch for in this specific debugging scenario
 2. What the current output means (patterns, errors, healthy vs unhealthy signs)
 3. Concrete next steps or commands to try if something looks wrong
 
@@ -121,13 +123,16 @@ async def analyze_monitoring_logs_stream(
     logs: str,
     cwd: str | None = None,
     model: str | None = None,
+    context: str | None = None,
 ):
     agent = CodeAgent()
     if model is not None:
         agent.model = model
 
     trimmed_logs = logs[-8000:] if logs else "(no output yet)"
+    trimmed_context = (context or "").strip() or "(none provided)"
     user_content = (
+        f"Debugging context:\n{trimmed_context}\n\n"
         f"Command: {command}\n"
         f"Working directory: {cwd or '(default)'}\n\n"
         f"Live output:\n{trimmed_logs}"

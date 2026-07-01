@@ -136,6 +136,7 @@ export default function App() {
   const [monitoringCommand, setMonitoringCommand] = useState(
     "while ($true) { Get-Date; Start-Sleep -Seconds 2 }"
   );
+  const [monitoringContext, setMonitoringContext] = useState("");
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
   const [liveStdout, setLiveStdout] = useState("");
   const [liveStderr, setLiveStderr] = useState("");
@@ -156,6 +157,7 @@ export default function App() {
   const analyzeIntervalRef = useRef<number | null>(null);
   const lastAnalyzedLengthRef = useRef(0);
   const logsSnapshotRef = useRef({ stdout: "", stderr: "" });
+  const monitoringContextRef = useRef("");
 
   const canSubmit = useMemo(() => {
     return path.trim().length > 0 && query.trim().length > 0 && !isStreaming;
@@ -192,6 +194,10 @@ export default function App() {
   useEffect(() => {
     logsSnapshotRef.current = { stdout: liveStdout, stderr: liveStderr };
   }, [liveStdout, liveStderr]);
+
+  useEffect(() => {
+    monitoringContextRef.current = monitoringContext;
+  }, [monitoringContext]);
 
   useEffect(() => {
     return () => {
@@ -433,6 +439,7 @@ export default function App() {
           cwd: path.trim() || undefined,
           logs: combinedLogs,
           model,
+          context: monitoringContextRef.current.trim() || undefined,
         }),
       });
 
@@ -689,6 +696,18 @@ export default function App() {
                     Run a shell command and stream output in real time. Use loops
                     or long-running commands (for example watch-style polling).
                   </p>
+
+                  <label className="field monitoring-context-field">
+                    <span className="field-label">What are we debugging today?</span>
+                    <textarea
+                      value={monitoringContext}
+                      onChange={(event) => setMonitoringContext(event.target.value)}
+                      placeholder="Describe the issue, expected behavior, and what you have tried so far"
+                      rows={3}
+                      className="field-control field-textarea monitoring-context-control"
+                      disabled={isMonitoringActive}
+                    />
+                  </label>
 
                   <label className="field monitoring-path-field">
                     <span className="field-label">Working directory</span>

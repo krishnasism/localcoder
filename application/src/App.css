@@ -249,8 +249,14 @@ body {
 
 .monitoring-path-field,
 .monitoring-command-field,
+.monitoring-context-field,
 .monitoring-model-field {
     gap: 4px;
+}
+
+.monitoring-context-control {
+    resize: vertical;
+    min-height: 72px;
 }
 
 .monitoring-command-control {
