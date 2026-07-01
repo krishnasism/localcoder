@@ -23,9 +23,7 @@ def test_looks_like_clarification_request():
 
 
 def test_is_actionable_plan_rejects_questions():
-    question = (
-        "Looking at your project, could you clarify what task you want me to do?"
-    )
+    question = "Looking at your project, could you clarify what task you want me to do?"
     assert not is_actionable_plan(question)
 
 

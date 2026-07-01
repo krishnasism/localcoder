@@ -341,7 +341,10 @@ class CodeAgent:
                         stagnant_iterations += 1
                         if looks_like_clarification_request(summary):
                             context.messages.append(
-                                {"role": "user", "content": PLANNING_CLARIFICATION_NUDGE}
+                                {
+                                    "role": "user",
+                                    "content": PLANNING_CLARIFICATION_NUDGE,
+                                }
                             )
                         continue
 
