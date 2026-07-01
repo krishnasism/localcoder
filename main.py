@@ -20,7 +20,9 @@ def _resolve_shell_execution(command: str):
         unix_shell = (
             "/bin/zsh"
             if os.path.exists("/bin/zsh")
-            else "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+            else "/bin/bash"
+            if os.path.exists("/bin/bash")
+            else "/bin/sh"
         )
     return [unix_shell, "-lc", command], os.path.basename(unix_shell)
 

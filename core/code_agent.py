@@ -210,7 +210,14 @@ class CodeAgent:
             return await result
         return result
 
-    def _build_initial_user_message(self, prompt: str, path: str, change_dir_result: str, initial_files: str, initial_tree: str) -> str:
+    def _build_initial_user_message(
+        self,
+        prompt: str,
+        path: str,
+        change_dir_result: str,
+        initial_files: str,
+        initial_tree: str,
+    ) -> str:
         return (
             f"{prompt}\n"
             f"Target file or folder: {path}\n"
@@ -235,7 +242,10 @@ class CodeAgent:
         structure_only_limit: int = 3,
     ) -> str:
         allowed_tools = self._allowed_tool_names(tools)
-        structure_only_tools = structure_only_tools or {"list_files", "get_directory_tree"}
+        structure_only_tools = structure_only_tools or {
+            "list_files",
+            "get_directory_tree",
+        }
         consecutive_structure_only_iterations = 0
         stagnant_iterations = 0
         iterations_without_edit = 0

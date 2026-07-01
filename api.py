@@ -81,7 +81,9 @@ async def monitoring_run_endpoint(request: MonitoringCommandRequest):
 @app.post("/monitoring/stream", response_class=StreamingResponse)
 async def monitoring_stream_endpoint(request: MonitoringCommandRequest):
     async def event_stream():
-        async for event in execute_shell_command_stream(request.command, cwd=request.cwd):
+        async for event in execute_shell_command_stream(
+            request.command, cwd=request.cwd
+        ):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
