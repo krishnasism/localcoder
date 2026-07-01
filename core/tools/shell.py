@@ -171,12 +171,23 @@ class Shell:
             return f"Error changing directory: {str(e)}"
 
     @staticmethod
-    async def list_files() -> str:
+    def _resolve_directory(path: str | None = None) -> str:
+        if not path:
+            return Shell.current_directory
+        if os.path.isabs(path):
+            return path
+        return os.path.join(Shell.current_directory, path)
+
+    @staticmethod
+    async def list_files(path: str | None = None) -> str:
         try:
+            target_dir = Shell._resolve_directory(path)
 
             def _list() -> str:
-                files = os.listdir(Shell.current_directory)
-                gitignore_path = os.path.join(Shell.current_directory, ".gitignore")
+                if not os.path.isdir(target_dir):
+                    return f"Error listing files: '{path or target_dir}' is not a directory."
+                files = os.listdir(target_dir)
+                gitignore_path = os.path.join(target_dir, ".gitignore")
                 if os.path.exists(gitignore_path):
                     with open(gitignore_path, "r") as gitignore_file:
                         ignored_files = [
@@ -192,13 +203,19 @@ class Shell:
             return f"Error listing files: {str(e)}"
 
     @staticmethod
-    async def get_directory_tree() -> str:
+    async def get_directory_tree(path: str | None = None) -> str:
         try:
+            base_dir = Shell._resolve_directory(path)
 
             def _tree() -> str:
+                if not os.path.isdir(base_dir):
+                    return (
+                        f"Error generating directory tree: "
+                        f"'{path or base_dir}' is not a directory."
+                    )
                 tree = []
-                for root, dirs, files in os.walk(Shell.current_directory):
-                    level = root.replace(Shell.current_directory, "").count(os.sep)
+                for root, dirs, files in os.walk(base_dir):
+                    level = root.replace(base_dir, "").count(os.sep)
                     indent = " " * 4 * level
                     tree.append(f"{indent}{os.path.basename(root)}{os.path.sep}")
                     subindent = " " * 4 * (level + 1)

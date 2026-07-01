@@ -282,6 +282,28 @@ class TestShellNonFileOperations:
         finally:
             self._restore(original_dir)
 
+    def test_list_files_with_path(self):
+        """list_files should list a subdirectory when path is provided."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.mkdir("subdir"))
+            asyncio.run(Shell.write_file(os.path.join("subdir", "inner.txt"), "data"))
+            result = asyncio.run(Shell.list_files("subdir"))
+            assert "inner.txt" in result
+        finally:
+            self._restore(original_dir)
+
+    def test_get_directory_tree_with_path(self):
+        """get_directory_tree should inspect a subdirectory when path is provided."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.mkdir("subdir"))
+            asyncio.run(Shell.write_file(os.path.join("subdir", "inner.txt"), "data"))
+            result = asyncio.run(Shell.get_directory_tree("subdir"))
+            assert "inner.txt" in result
+        finally:
+            self._restore(original_dir)
+
     # -- get_directory_tree --
 
     def test_get_directory_tree(self):

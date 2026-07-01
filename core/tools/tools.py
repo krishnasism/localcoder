@@ -48,10 +48,20 @@ FS_READ_ONLY_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List all files in the current working directory.",
+            "description": (
+                "List files in the current working directory or an optional subdirectory."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Optional relative or absolute directory path to list. "
+                            "Defaults to the current working directory."
+                        ),
+                    }
+                },
                 "required": [],
             },
         },
@@ -60,10 +70,21 @@ FS_READ_ONLY_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_directory_tree",
-            "description": "Get a tree representation of the current working directory.",
+            "description": (
+                "Get a tree representation of the current working directory "
+                "or an optional subdirectory."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Optional relative or absolute directory path to inspect. "
+                            "Defaults to the current working directory."
+                        ),
+                    }
+                },
                 "required": [],
             },
         },

@@ -185,6 +185,38 @@ class CodeAgent:
         if filename:
             context.files_modified.add(filename)
 
+    @staticmethod
+    def _filter_tool_args(fn, args: dict) -> dict:
+        try:
+            signature = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return args
+
+        if any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        ):
+            return args
+
+        allowed = {
+            name
+            for name, param in signature.parameters.items()
+            if param.kind
+            in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        }
+        filtered = {key: value for key, value in args.items() if key in allowed}
+        dropped = sorted(set(args) - set(filtered))
+        if dropped:
+            logger.warning(
+                "Ignored unknown arguments for %s: %s",
+                getattr(fn, "__name__", repr(fn)),
+                ", ".join(dropped),
+            )
+        return filtered
+
     async def _execute_tool(
         self,
         tool_call,
@@ -205,6 +237,7 @@ class CodeAgent:
         if fn is None:
             return f"Unknown tool '{tool_name}'"
 
+        args = self._filter_tool_args(fn, args)
         result = fn(**args)
         if inspect.isawaitable(result):
             return await result
