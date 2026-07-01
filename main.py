@@ -1,11 +1,70 @@
 import argparse
 import asyncio
 import os
+import re
 import shutil
 import subprocess
 import threading
 from typing import IO
 from core.code_agent import CodeAgent
+
+
+_CD_COMMAND_RE = re.compile(
+    r"^\s*(?:cd|chdir|set-location|sl)\s*(.*)\s*;?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_path_quotes(path: str) -> str:
+    path = path.strip()
+    if len(path) >= 2 and path[0] == path[-1] and path[0] in ('"', "'"):
+        return path[1:-1]
+    return path
+
+
+def _resolve_cd_command(command: str, working_directory: str) -> dict | None:
+    match = _CD_COMMAND_RE.fullmatch(command)
+    if not match:
+        return None
+
+    target = _strip_path_quotes(match.group(1).strip())
+    if not target:
+        target = os.path.expanduser("~")
+    elif target == "-":
+        return {
+            "shell": "builtin",
+            "cwd": working_directory,
+            "stdout": "",
+            "stderr": (
+                "cd - is not supported in this session. "
+                "Update the working directory field instead.\n"
+            ),
+            "returncode": 1,
+        }
+
+    new_path = (
+        os.path.normpath(target)
+        if os.path.isabs(target)
+        else os.path.normpath(os.path.join(working_directory, target))
+    )
+
+    if not os.path.isdir(new_path):
+        return {
+            "shell": "builtin",
+            "cwd": working_directory,
+            "stdout": "",
+            "stderr": f"The system cannot find the path specified: {target}\n",
+            "returncode": 1,
+        }
+
+    resolved = os.path.abspath(new_path)
+    return {
+        "shell": "builtin",
+        "cwd": resolved,
+        "stdout": f"{resolved}\n",
+        "stderr": "",
+        "returncode": 0,
+    }
 
 
 def _resolve_shell_execution(command: str):
@@ -89,6 +148,10 @@ async def generate_code_stream(query, path, model=None):
 
 async def execute_shell_command(command: str, cwd: str | None = None):
     working_directory = cwd or os.getcwd()
+    cd_result = _resolve_cd_command(command, working_directory)
+    if cd_result is not None:
+        return cd_result
+
     exec_args, shell_name = _resolve_shell_execution(command)
 
     returncode, stdout, stderr = await asyncio.to_thread(
@@ -169,6 +232,34 @@ async def analyze_monitoring_logs_stream(
 
 async def execute_shell_command_stream(command: str, cwd: str | None = None):
     working_directory = cwd or os.getcwd()
+    cd_result = _resolve_cd_command(command, working_directory)
+    if cd_result is not None:
+        yield {
+            "type": "start",
+            "shell": cd_result["shell"],
+            "cwd": working_directory,
+        }
+        if cd_result["returncode"] == 0:
+            yield {
+                "type": "cwd",
+                "cwd": cd_result["cwd"],
+            }
+        if cd_result["stdout"]:
+            yield {
+                "type": "stdout",
+                "content": cd_result["stdout"],
+            }
+        if cd_result["stderr"]:
+            yield {
+                "type": "stderr",
+                "content": cd_result["stderr"],
+            }
+        yield {
+            "type": "end",
+            "returncode": cd_result["returncode"],
+        }
+        return
+
     exec_args, shell_name = _resolve_shell_execution(command)
 
     yield {

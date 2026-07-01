@@ -59,12 +59,14 @@ const AVAILABLE_MODELS = [
 
 const TOOL_CATALOG: Array<{
   id: ToolSlug;
+  label: string;
   title: string;
   description: string;
   status: string;
 }> = [
   {
     id: "coding",
+    label: "Code",
     title: "Coding",
     description:
       "Copilot-style coding assistant with streaming plan, tool calls, and final output.",
@@ -72,6 +74,7 @@ const TOOL_CATALOG: Array<{
   },
   {
     id: "monitoring",
+    label: "Watch",
     title: "Monitoring",
     description:
       "Track runtime health, active tasks, logs, and system signals for local tools.",
@@ -79,6 +82,7 @@ const TOOL_CATALOG: Array<{
   },
   {
     id: "research",
+    label: "Read",
     title: "Research",
     description:
       "Gather references, compare options, and organize findings for implementation work.",
@@ -149,6 +153,7 @@ export default function App() {
   );
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [monitoringError, setMonitoringError] = useState<string | null>(null);
+  const [agentInsightsEnabled, setAgentInsightsEnabled] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const monitoringContainerRef = useRef<HTMLDivElement | null>(null);
   const insightsContainerRef = useRef<HTMLDivElement | null>(null);
@@ -158,6 +163,8 @@ export default function App() {
   const lastAnalyzedLengthRef = useRef(0);
   const logsSnapshotRef = useRef({ stdout: "", stderr: "" });
   const monitoringContextRef = useRef("");
+  const agentInsightsEnabledRef = useRef(false);
+  const activeCommandRef = useRef("");
 
   const canSubmit = useMemo(() => {
     return path.trim().length > 0 && query.trim().length > 0 && !isStreaming;
@@ -198,6 +205,10 @@ export default function App() {
   useEffect(() => {
     monitoringContextRef.current = monitoringContext;
   }, [monitoringContext]);
+
+  useEffect(() => {
+    agentInsightsEnabledRef.current = agentInsightsEnabled;
+  }, [agentInsightsEnabled]);
 
   useEffect(() => {
     return () => {
@@ -379,9 +390,34 @@ export default function App() {
     }
   }
 
+  function stopAnalyzeInterval() {
+    analyzeAbortRef.current?.abort();
+    analyzeAbortRef.current = null;
+    setIsAnalyzing(false);
+
+    if (analyzeIntervalRef.current !== null) {
+      window.clearInterval(analyzeIntervalRef.current);
+      analyzeIntervalRef.current = null;
+    }
+  }
+
+  function startAnalyzeInterval(command: string) {
+    if (!agentInsightsEnabledRef.current) return;
+
+    stopAnalyzeInterval();
+    analyzeIntervalRef.current = window.setInterval(() => {
+      void requestMonitoringInsight(command);
+    }, 12000);
+  }
+
   function stopMonitoringStream(abortAnalyze = false) {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
+
+    if (analyzeIntervalRef.current !== null) {
+      window.clearInterval(analyzeIntervalRef.current);
+      analyzeIntervalRef.current = null;
+    }
 
     if (abortAnalyze) {
       analyzeAbortRef.current?.abort();
@@ -389,12 +425,8 @@ export default function App() {
       setIsAnalyzing(false);
     }
 
-    if (analyzeIntervalRef.current !== null) {
-      window.clearInterval(analyzeIntervalRef.current);
-      analyzeIntervalRef.current = null;
-    }
-
     setIsMonitoringActive(false);
+    activeCommandRef.current = "";
   }
 
   function stopMonitoringSession() {
@@ -402,6 +434,8 @@ export default function App() {
   }
 
   async function requestMonitoringInsight(command: string, force = false) {
+    if (!agentInsightsEnabledRef.current) return;
+
     const { stdout, stderr } = logsSnapshotRef.current;
     const combinedLogs = `${stdout}${stderr}`;
     const nextLength = combinedLogs.length;
@@ -530,10 +564,11 @@ export default function App() {
     streamAbortRef.current = abortController;
 
     setIsMonitoringActive(true);
+    activeCommandRef.current = command;
 
-    analyzeIntervalRef.current = window.setInterval(() => {
-      void requestMonitoringInsight(command);
-    }, 12000);
+    if (agentInsightsEnabledRef.current) {
+      startAnalyzeInterval(command);
+    }
 
     let sessionStdout = "";
     let sessionStderr = "";
@@ -568,6 +603,13 @@ export default function App() {
           return;
         }
 
+        if (event.type === "cwd" && event.cwd) {
+          setPath(event.cwd);
+          setStreamMeta((current) => ({ ...current, cwd: event.cwd }));
+          setMonitoringCommand("");
+          return;
+        }
+
         if (event.type === "stdout" && event.content) {
           sessionStdout += event.content;
           logsSnapshotRef.current = {
@@ -591,7 +633,9 @@ export default function App() {
         if (event.type === "end" && typeof event.returncode === "number") {
           setStreamReturncode(event.returncode);
           stopMonitoringStream(false);
-          void requestMonitoringInsight(command, true);
+          if (agentInsightsEnabledRef.current) {
+            void requestMonitoringInsight(command, true);
+          }
         }
       });
     } catch (streamError) {
@@ -614,7 +658,21 @@ export default function App() {
     }
   }
 
-  function handleMonitoringToggle() {
+  function handleAgentInsightsModeChange(enabled: boolean) {
+    agentInsightsEnabledRef.current = enabled;
+    setAgentInsightsEnabled(enabled);
+
+    if (!enabled) {
+      stopAnalyzeInterval();
+      return;
+    }
+
+    if (isMonitoringActive && activeCommandRef.current) {
+      startAnalyzeInterval(activeCommandRef.current);
+    }
+  }
+
+  function handleCommandRun() {
     if (isMonitoringActive) {
       stopMonitoringSession();
       return;
@@ -622,7 +680,7 @@ export default function App() {
 
     const command = monitoringCommand.trim();
     if (!command) {
-      setMonitoringError("Enter a command before starting monitoring.");
+      setMonitoringError("Enter a command before running.");
       return;
     }
 
@@ -631,53 +689,57 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <div
-        className={`app-container ${
-          activeTool === "coding" ? "app-container-coding" : "app-container-tool"
-        }`}
-      >
-        <header className="app-header">
-          <div>
-            <h1 className="app-title">Coolbot</h1>
-            <p className="app-subtitle">
-              Your local copilot
-            </p>
+      <div className="app-layout">
+        <aside className="tool-sidebar" aria-label="Tools">
+          <div className="tool-sidebar-brand" title="Coolbot">
+            <span className="tool-sidebar-logo">CB</span>
           </div>
-          <div className="header-chips" aria-label="Session overview">
-            <span className="chip">Model: {model}</span>
-            <span className="chip">Prompts: {userMessageCount}</span>
-            <span className="chip">Events: {agentEventCount}</span>
-            <span className={`chip ${isStreaming ? "chip-live" : "chip-idle"}`}>
-              {isStreaming ? "Live" : "Idle"}
-            </span>
-          </div>
-        </header>
-
-        <section className="catalog-panel" aria-label="Tool catalog">
-          <div className="catalog-header-row">
-            <h2 className="catalog-title">Local Tools</h2>
-            <span className="catalog-hint">Choose a tool to continue</span>
-          </div>
-          <div className="catalog-grid">
+          <nav className="tool-nav">
             {TOOL_CATALOG.map((tool) => {
               const isActive = activeTool === tool.id;
               return (
                 <button
                   key={tool.id}
                   type="button"
-                  className={`tool-card ${isActive ? "tool-card-active" : ""}`}
+                  className={`tool-nav-item ${isActive ? "tool-nav-item-active" : ""}`}
                   onClick={() => navigateToTool(tool.id)}
+                  title={`${tool.title} — ${tool.description}`}
+                  aria-current={isActive ? "page" : undefined}
                 >
-                  <div className="tool-card-top">
-                    <h3 className="tool-card-title">{tool.title}</h3>
-                    <span className="tool-card-status">{tool.status}</span>
-                  </div>
-                  <p className="tool-card-description">{tool.description}</p>
+                  <span className="tool-nav-label">{tool.label}</span>
+                  <span
+                    className={`tool-nav-status ${
+                      tool.status === "Ready"
+                        ? "tool-nav-status-ready"
+                        : "tool-nav-status-setup"
+                    }`}
+                    aria-hidden="true"
+                  />
                 </button>
               );
             })}
-          </div>
-        </section>
+          </nav>
+        </aside>
+
+        <main
+          className={`app-main ${
+            activeTool === "coding" ? "app-main-coding" : "app-main-tool"
+          }`}
+        >
+          <header className="app-header">
+            <div className="app-header-title">
+              <h1 className="app-title">Coolbot</h1>
+              <span className="app-subtitle">Your local copilot</span>
+            </div>
+            <div className="header-chips" aria-label="Session overview">
+              <span className="chip">Model: {model}</span>
+              <span className="chip">Prompts: {userMessageCount}</span>
+              <span className="chip">Events: {agentEventCount}</span>
+              <span className={`chip ${isStreaming ? "chip-live" : "chip-idle"}`}>
+                {isStreaming ? "Live" : "Idle"}
+              </span>
+            </div>
+          </header>
 
         {activeTool !== "coding" ? (
           <section
@@ -693,21 +755,23 @@ export default function App() {
               <div className="monitoring-layout">
                 <div className="monitoring-main">
                   <p className="tool-landing-text">
-                    Run a shell command and stream output in real time. Use loops
-                    or long-running commands (for example watch-style polling).
+                    Run a shell command and stream output in real time. Enable agent
+                    insights when you want the model to analyze logs.
                   </p>
 
-                  <label className="field monitoring-context-field">
-                    <span className="field-label">What are we debugging today?</span>
-                    <textarea
-                      value={monitoringContext}
-                      onChange={(event) => setMonitoringContext(event.target.value)}
-                      placeholder="Describe the issue, expected behavior, and what you have tried so far"
-                      rows={3}
-                      className="field-control field-textarea monitoring-context-control"
-                      disabled={isMonitoringActive}
-                    />
-                  </label>
+                  {agentInsightsEnabled ? (
+                    <label className="field monitoring-context-field">
+                      <span className="field-label">What are we debugging today?</span>
+                      <textarea
+                        value={monitoringContext}
+                        onChange={(event) => setMonitoringContext(event.target.value)}
+                        placeholder="Describe the issue, expected behavior, and what you have tried so far"
+                        rows={3}
+                        className="field-control field-textarea monitoring-context-control"
+                        disabled={isMonitoringActive}
+                      />
+                    </label>
+                  ) : null}
 
                   <label className="field monitoring-path-field">
                     <span className="field-label">Working directory</span>
@@ -725,17 +789,30 @@ export default function App() {
                     <input
                       value={monitoringCommand}
                       onChange={(event) => setMonitoringCommand(event.target.value)}
-                      placeholder="Enter command to monitor"
+                      placeholder="e.g. ls, Get-ChildItem, or a watch loop"
                       className="field-control monitoring-command-control"
                       disabled={isMonitoringActive}
                     />
                   </label>
 
+                  <div className="monitoring-run-row">
+                    <button
+                      type="button"
+                      className={`send-button monitoring-run-button ${
+                        isMonitoringActive ? "monitoring-toggle-stop" : ""
+                      }`}
+                      onClick={handleCommandRun}
+                      disabled={!isMonitoringActive && !monitoringCommand.trim()}
+                    >
+                      {isMonitoringActive ? "Stop" : "Run command"}
+                    </button>
+                  </div>
+
                   <div className="monitoring-status-row">
                     <span
                       className={`chip ${isMonitoringActive ? "chip-live" : "chip-idle"}`}
                     >
-                      {isMonitoringActive ? "Monitoring live" : "Monitoring idle"}
+                      {isMonitoringActive ? "Running" : "Idle"}
                     </span>
                     {streamMeta.shell || streamMeta.cwd ? (
                       <span className="monitoring-meta">
@@ -754,8 +831,7 @@ export default function App() {
                   <div ref={monitoringContainerRef} className="monitoring-output">
                     {!liveStdout && !liveStderr ? (
                       <div className="monitoring-placeholder">
-                        Output will appear here once monitoring starts. Try a loop
-                        like: while ($true) {"{"} Get-Date; Start-Sleep 2 {"}"}
+                        Output will appear here after you run a command.
                       </div>
                     ) : null}
                     {liveStdout ? (
@@ -773,48 +849,73 @@ export default function App() {
 
                 <aside className="monitoring-sidebar" aria-label="Monitoring agent">
                   <div className="monitoring-sidebar-header">
-                    <h3 className="monitoring-sidebar-title">Local Agent</h3>
+                    <h3 className="monitoring-sidebar-title">Agent insights</h3>
                     <p className="monitoring-sidebar-subtitle">
-                      The model explains what to watch for and what the logs mean.
+                      Optional AI analysis of command output while it runs.
                     </p>
                   </div>
 
-                  <label className="field monitoring-model-field">
-                    <span className="field-label">Model</span>
-                    <select
-                      value={model}
-                      onChange={(event) => setModel(event.target.value)}
-                      disabled={isMonitoringActive || isAnalyzing}
-                      className="field-control"
-                    >
-                      {AVAILABLE_MODELS.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <button
-                    type="button"
-                    className={`send-button monitoring-toggle-button ${
-                      isMonitoringActive ? "monitoring-toggle-stop" : ""
-                    }`}
-                    onClick={handleMonitoringToggle}
-                    disabled={!isMonitoringActive && !monitoringCommand.trim()}
+                  <fieldset
+                    className="monitoring-mode-fieldset"
+                    disabled={isMonitoringActive}
                   >
-                    {isMonitoringActive ? "Stop monitoring" : "Start monitoring"}
-                  </button>
+                    <legend className="monitoring-mode-legend">Mode</legend>
+                    <div className="monitoring-mode-options">
+                      <label className="monitoring-mode-option">
+                        <input
+                          type="radio"
+                          name="monitoring-mode"
+                          checked={!agentInsightsEnabled}
+                          onChange={() => handleAgentInsightsModeChange(false)}
+                        />
+                        <span>Output only</span>
+                      </label>
+                      <label className="monitoring-mode-option">
+                        <input
+                          type="radio"
+                          name="monitoring-mode"
+                          checked={agentInsightsEnabled}
+                          onChange={() => handleAgentInsightsModeChange(true)}
+                        />
+                        <span>With agent</span>
+                      </label>
+                    </div>
+                  </fieldset>
+
+                  {agentInsightsEnabled ? (
+                    <label className="field monitoring-model-field">
+                      <span className="field-label">Model</span>
+                      <select
+                        value={model}
+                        onChange={(event) => setModel(event.target.value)}
+                        disabled={isMonitoringActive || isAnalyzing}
+                        className="field-control"
+                      >
+                        {AVAILABLE_MODELS.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
 
                   <div ref={insightsContainerRef} className="monitoring-insights">
-                    {monitoringInsights.length === 0 ? (
+                    {!agentInsightsEnabled ? (
                       <div className="monitoring-insight-placeholder">
-                        Start monitoring to get guidance on the command and live
+                        Output only mode — run commands like <code>ls</code> without
+                        calling the model. Switch to &ldquo;With agent&rdquo; for live
+                        analysis.
+                      </div>
+                    ) : monitoringInsights.length === 0 ? (
+                      <div className="monitoring-insight-placeholder">
+                        Run a command to get guidance on what to watch for in the
                         output.
                       </div>
                     ) : null}
 
-                    {monitoringInsights.map((insight) => (
+                    {agentInsightsEnabled
+                      ? monitoringInsights.map((insight) => (
                       <article key={insight.id} className="monitoring-insight-card">
                         <div className="monitoring-insight-meta">
                           <span>Agent insight</span>
@@ -831,7 +932,8 @@ export default function App() {
                           className="monitoring-insight-body markdown-body"
                         />
                       </article>
-                    ))}
+                    ))
+                      : null}
                   </div>
                 </aside>
               </div>
@@ -960,6 +1062,7 @@ export default function App() {
           })}
           </section>
         ) : null}
+        </main>
       </div>
     </div>
   );
