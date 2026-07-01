@@ -9,7 +9,7 @@ client = TestClient(api.app)
 
 
 def test_explain_code_endpoint(monkeypatch):
-    async def _fake_explain(query, path):
+    async def _fake_explain(query, path, model=None):
         assert query == "what"
         assert path == "file.py"
         return "explanation"
@@ -25,7 +25,7 @@ def test_explain_code_endpoint(monkeypatch):
 def test_generate_code_endpoint_non_stream(monkeypatch):
     called = {"value": False}
 
-    async def _fake_generate(query, path):
+    async def _fake_generate(query, path, model=None):
         called["value"] = True
         assert query == "do"
         assert path == "repo"
@@ -40,7 +40,7 @@ def test_generate_code_endpoint_non_stream(monkeypatch):
 
 
 def test_generate_code_endpoint_stream(monkeypatch):
-    async def _fake_stream(query, path):
+    async def _fake_stream(query, path, model=None):
         assert query == "do"
         assert path == "repo"
         yield {"type": "status", "step": "planning", "message": "start"}

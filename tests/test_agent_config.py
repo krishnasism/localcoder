@@ -56,7 +56,7 @@ class TestLoadAgentConfig:
         assert config.model == "qwen3.6"
         assert config.openai_base_url == "http://localhost:11434/v1"
         assert config.openai_api_key == "local"
-        assert config.max_iterations == 50
+        assert config.max_iterations == 100
 
     @mock.patch("os.getenv")
     def test_max_iterations_converted_to_int(self, mock_getenv):
