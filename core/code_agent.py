@@ -23,6 +23,7 @@ from core.agent.utils import (
     looks_like_plan,
     materialize_tool_calls,
     resolve_target_directory,
+    should_skip_assistant_message,
     tool_call_signature,
     truncate_for_context,
 )
@@ -173,6 +174,18 @@ class CodeAgent:
     def _extract_finish_summary(tool_call, message) -> str:
         args = CodeAgent._safe_load_tool_args(tool_call.function.arguments)
         return (args.get("summary") or message.content or "").strip()
+
+    async def _emit_plan(
+        self, on_event: EventCallback | None, plan: str
+    ) -> None:
+        await self._emit(
+            on_event,
+            {
+                "type": "plan",
+                "step": "planning",
+                "content": plan,
+            },
+        )
 
     @staticmethod
     def _fallback_plan(prompt: str) -> str:
@@ -335,7 +348,13 @@ class CodeAgent:
                 )
             )
 
-            if message.content:
+            if message.content and not should_skip_assistant_message(
+                step,
+                finish_tool,
+                resolved_tool_calls,
+                message,
+                self._extract_finish_summary,
+            ):
                 await self._emit(
                     on_event,
                     {
@@ -380,13 +399,14 @@ class CodeAgent:
                         resolved = await on_finish(summary)
                         if resolved is not None:
                             summary = resolved
+                    if step == "planning":
+                        await self._emit_plan(on_event, summary)
                     await self._emit(
                         on_event,
                         {
                             "type": "status",
                             "step": step,
                             "message": f"{step.title()} completed.",
-                            "summary": summary,
                         },
                     )
                     return summary
@@ -475,6 +495,7 @@ class CodeAgent:
                     stagnant_iterations += 1
                 elif looks_like_plan(message.content):
                     await self.plan_finish(summary=message.content)
+                    await self._emit_plan(on_event, message.content)
                     return message.content
 
             if iteration_had_progress:
@@ -556,13 +577,13 @@ class CodeAgent:
                 if step == "planning":
                     fallback = self._fallback_plan(context.current_task)
                     await self.plan_finish(summary=fallback)
+                    await self._emit_plan(on_event, fallback)
                     await self._emit(
                         on_event,
                         {
                             "type": "status",
                             "step": step,
                             "message": "Using fallback plan.",
-                            "summary": fallback,
                         },
                     )
                     return fallback
@@ -704,14 +725,6 @@ class CodeAgent:
             prompt, path, on_event=on_event, context=context
         )
         context.plan = plan
-        await self._emit(
-            on_event,
-            {
-                "type": "plan",
-                "step": "planning",
-                "content": plan,
-            },
-        )
         logger.debug(f"Plan generated: {context.plan}")
 
         context.messages[0] = {"role": "system", "content": SYSTEM_PROMPT}

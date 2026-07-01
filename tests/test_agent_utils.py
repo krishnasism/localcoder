@@ -7,6 +7,7 @@ from core.agent.utils import (
     is_tool_error,
     looks_like_clarification_request,
     parse_plan_steps,
+    should_skip_assistant_message,
     tool_call_signature,
 )
 
@@ -51,6 +52,41 @@ Let's run this:
 def test_tool_call_signature_stable():
     sig = tool_call_signature("read_file", {"filename": "a.py"})
     assert sig == tool_call_signature("read_file", {"filename": "a.py"})
+
+
+def test_should_skip_assistant_message_for_plan_finish():
+    from types import SimpleNamespace
+    import json
+
+    def extract_summary(tool_call, message):
+        args = json.loads(tool_call.function.arguments)
+        return args.get("summary") or message.content or ""
+
+    plan = "1. Edit App.tsx\n2. Add theme toggle"
+    tool_call = SimpleNamespace(
+        id="call-1",
+        type="function",
+        function=SimpleNamespace(
+            name="plan_finish",
+            arguments=json.dumps({"summary": plan}),
+        ),
+    )
+    message = SimpleNamespace(content=plan, tool_calls=[tool_call])
+    assert should_skip_assistant_message(
+        "planning", "plan_finish", [tool_call], message, extract_summary
+    )
+
+
+def test_should_not_skip_regular_assistant_message():
+    from types import SimpleNamespace
+
+    def extract_summary(_tool_call, message):
+        return message.content or ""
+
+    message = SimpleNamespace(content="Reading files now.", tool_calls=[])
+    assert not should_skip_assistant_message(
+        "planning", "plan_finish", [], message, extract_summary
+    )
 
 
 def test_is_edit_failure():

@@ -939,8 +939,7 @@ export default function App() {
               </div>
             ) : (
               <p className="tool-landing-text">
-                Research tool page is active. Next step can be adding source
-                discovery, notes, and citation workflows.
+                WIP
               </p>
             )}
           </section>

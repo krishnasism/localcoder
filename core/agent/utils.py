@@ -244,6 +244,32 @@ def materialize_tool_calls(tool_calls, content: str | None) -> list:
     return materialized
 
 
+def should_skip_assistant_message(
+    step: str,
+    finish_tool: str,
+    resolved_tool_calls: list,
+    message,
+    extract_summary,
+) -> bool:
+    """Avoid duplicating plan/final content as a separate assistant_message."""
+    for tool_call in resolved_tool_calls:
+        if tool_call.function.name != finish_tool:
+            continue
+        summary = extract_summary(tool_call, message)
+        if step == "planning":
+            return is_actionable_plan(summary)
+        return True
+
+    if (
+        step == "planning"
+        and message.content
+        and not resolved_tool_calls
+        and is_actionable_plan(message.content)
+    ):
+        return True
+    return False
+
+
 def counts_as_editing_progress(tool_name: str, result_text: str) -> bool:
     if tool_name not in EDIT_TOOLS:
         return False
