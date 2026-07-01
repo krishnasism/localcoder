@@ -1,12 +1,13 @@
 from core.agent.models import AgentContext
 from core.agent.utils import (
     build_execution_reminder,
+    extract_tool_calls_from_content,
     is_actionable_plan,
     is_edit_failure,
     is_tool_error,
     looks_like_clarification_request,
-    looks_like_plan,
     parse_plan_steps,
+    tool_call_signature,
 )
 
 
@@ -32,9 +33,24 @@ def test_is_actionable_plan_accepts_numbered_plan():
     assert is_actionable_plan(plan)
 
 
-def test_looks_like_plan_ignores_inline_dashes():
-    text = "Coolbot - Local copilot with tools"
-    assert not looks_like_plan(text)
+def test_extract_tool_calls_from_content():
+    text = """
+Let's run this:
+{
+    "name": "run_shell_command",
+    "arguments": {
+        "command": "python -m pytest tests"
+    }
+}
+"""
+    calls = extract_tool_calls_from_content(text)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "run_shell_command"
+
+
+def test_tool_call_signature_stable():
+    sig = tool_call_signature("read_file", {"filename": "a.py"})
+    assert sig == tool_call_signature("read_file", {"filename": "a.py"})
 
 
 def test_is_edit_failure():

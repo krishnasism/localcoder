@@ -16,6 +16,8 @@ class AgentContext:
     files_modified: set[str] = field(default_factory=set)
     files_read: set[str] = field(default_factory=set)
     edit_failures: int = 0
+    recent_tool_signatures: list[str] = field(default_factory=list)
+    discovery_iterations: int = 0
 
 
 @dataclass

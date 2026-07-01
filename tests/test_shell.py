@@ -193,6 +193,23 @@ class TestShellNonFileOperations:
 
     # -- run_shell_command --
 
+    def test_run_shell_command_normalizes_windows_activate(self):
+        """Windows venv activate chains should run via venv python directly."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            os.makedirs(os.path.join(td, "venv", "Scripts"), exist_ok=True)
+            with open(os.path.join(td, "venv", "Scripts", "python.exe"), "w") as f:
+                f.write("")
+
+            normalized = Shell._normalize_shell_command(
+                "venv\\Scripts\\activate.bat && python -m pytest --collect-only tests"
+            )
+            assert "activate.bat" not in normalized
+            assert "python.exe" in normalized
+            assert "pytest" in normalized
+        finally:
+            self._restore(original_dir)
+
     def test_run_shell_command_success_win(self):
         """run_shell_command should succeed on Windows echo command."""
         td, original_dir = self._chdir_to_temp()

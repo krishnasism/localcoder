@@ -38,7 +38,11 @@ Rules:
 - Before `sed`, ensure `old_string` matches the file exactly (whitespace, quotes, spelling).
 - If `sed` returns EDIT_FAILED, read the file and fix the match — do not guess.
 - Do not call `list_files` or `get_directory_tree` unless the plan requires a new path you have not seen.
-- After each successful edit, move to the next plan step. Do not loop on reads.
+- Do not repeat the same tool call. If you already have output, use it and move on.
+- For running tests, use the `pytest` tool — not `run_shell_command` with activate/pytest collect.
+- Test files are under `tests/` unless the plan says otherwise. Do not run `pytest --collect-only` in a loop.
+- Invoke tools through the tool-calling API. Never print tool JSON in chat text.
+- After each successful edit, move to the next plan step. Do not loop on reads or shell commands.
 - Verify changes with `read_file` or tests only when the plan says to.
 - Call `finish` only after every planned change is complete.
 - Current Operating System: {current_os}

@@ -3,6 +3,13 @@ import asyncio
 
 
 class PythonTools:
+    @staticmethod
+    def _pytest_executable() -> list[str]:
+        venv_python = Shell._resolve_venv_python()
+        if venv_python:
+            return [venv_python, "-m", "pytest"]
+        return ["python", "-m", "pytest"]
+
     async def setup_python_virtual_env(self, env_name: str) -> str:
         try:
             venv_prefix = "agent_venv_"
@@ -28,23 +35,26 @@ class PythonTools:
     async def run_pytest(self, test_file_or_folder: str) -> str:
         try:
             process = await asyncio.create_subprocess_exec(
-                "pytest",
+                *self._pytest_executable(),
                 test_file_or_folder,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=Shell.current_directory,
             )
             stdout, stderr = await process.communicate()
-            return (stdout.decode(errors="ignore") if stdout else "") + (
+            output = (stdout.decode(errors="ignore") if stdout else "") + (
                 stderr.decode(errors="ignore") if stderr else ""
             )
+            if process.returncode == 0:
+                return output
+            return f"Error running pytest (exit {process.returncode}): {output}"
         except Exception as e:
             return f"Error running pytest: {str(e)}"
 
     async def run_pytest_with_coverage(self, test_file_or_folder: str) -> str:
         try:
             process = await asyncio.create_subprocess_exec(
-                "pytest",
+                *self._pytest_executable(),
                 "--cov",
                 ".",
                 test_file_or_folder,
@@ -53,8 +63,14 @@ class PythonTools:
                 cwd=Shell.current_directory,
             )
             stdout, stderr = await process.communicate()
-            return (stdout.decode(errors="ignore") if stdout else "") + (
+            output = (stdout.decode(errors="ignore") if stdout else "") + (
                 stderr.decode(errors="ignore") if stderr else ""
+            )
+            if process.returncode == 0:
+                return output
+            return (
+                f"Error running pytest with coverage (exit {process.returncode}): "
+                f"{output}"
             )
         except Exception as e:
             return f"Error running pytest with coverage: {str(e)}"

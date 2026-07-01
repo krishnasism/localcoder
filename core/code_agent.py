@@ -5,18 +5,25 @@ from core.agent.models import AgentContext, FinishResult
 from core.agent.prompts import PLANNING_SYSTEM_PROMPT, SYSTEM_PROMPT
 from core.agent.toolsets import build_tool_registry
 from core.agent.utils import (
+    DISCOVERY_LOOP_NUDGE,
+    DISCOVERY_TOOLS,
     EDIT_TOOLS,
+    EMBEDDED_TOOL_NUDGE,
     PLANNING_CLARIFICATION_NUDGE,
     PLANNING_NO_PLAN_NUDGE,
     PLANNING_REJECTION_MESSAGE,
+    REPEATED_TOOL_NUDGE,
     assistant_message_to_dict,
     build_execution_reminder,
+    counts_as_editing_progress,
     is_actionable_plan,
     is_edit_failure,
     is_tool_error,
     looks_like_clarification_request,
     looks_like_plan,
+    materialize_tool_calls,
     resolve_target_directory,
+    tool_call_signature,
     truncate_for_context,
 )
 from core.tools.shell import Shell
@@ -145,6 +152,7 @@ class CodeAgent:
             model=self.model,
             messages=context.messages,
             tools=tools,
+            tool_choice="auto",
         )
 
     @staticmethod
@@ -194,6 +202,15 @@ class CodeAgent:
         filename = args.get("filename") or args.get("src")
         if filename:
             context.files_modified.add(filename)
+
+    def _record_tool_signature(
+        self, context: AgentContext, tool_name: str, args: dict
+    ) -> bool:
+        signature = tool_call_signature(tool_name, args)
+        repeated = signature in context.recent_tool_signatures[-3:]
+        context.recent_tool_signatures.append(signature)
+        context.recent_tool_signatures = context.recent_tool_signatures[-12:]
+        return repeated
 
     @staticmethod
     def _filter_tool_args(fn, args: dict) -> dict:
@@ -307,8 +324,16 @@ class CodeAgent:
             )
             response = await self.__call_llm(context, tools)
             message = response.choices[0].message
+            resolved_tool_calls = materialize_tool_calls(
+                message.tool_calls, message.content
+            )
+            used_embedded_tools = bool(resolved_tool_calls and not message.tool_calls)
 
-            context.messages.append(assistant_message_to_dict(message))
+            context.messages.append(
+                assistant_message_to_dict(
+                    message, tool_calls=resolved_tool_calls or None
+                )
+            )
 
             if message.content:
                 await self._emit(
@@ -325,8 +350,9 @@ class CodeAgent:
             iteration_had_progress = False
             iteration_had_edit = False
             iteration_had_edit_failure = False
+            iteration_had_repeated_tool = False
 
-            for tool_call in message.tool_calls or []:
+            for tool_call in resolved_tool_calls:
                 tool_names.append(tool_call.function.name)
                 if tool_call.function.name == finish_tool:
                     summary = self._extract_finish_summary(tool_call, message)
@@ -366,6 +392,10 @@ class CodeAgent:
                     return summary
                 try:
                     args = self._safe_load_tool_args(tool_call.function.arguments)
+                    if self._record_tool_signature(
+                        context, tool_call.function.name, args
+                    ):
+                        iteration_had_repeated_tool = True
                     await self._emit(
                         on_event,
                         {
@@ -397,7 +427,11 @@ class CodeAgent:
                         },
                     )
                     context.tool_results[tool_call.id] = result
-                    if not is_tool_error(result_text):
+                    if step == "planning" and not is_tool_error(result_text):
+                        iteration_had_progress = True
+                    elif counts_as_editing_progress(
+                        tool_call.function.name, result_text
+                    ):
                         iteration_had_progress = True
 
                     context.messages.append(
@@ -428,11 +462,7 @@ class CodeAgent:
                         }
                     )
 
-            if (
-                step == "planning"
-                and message.content
-                and not (message.tool_calls or [])
-            ):
+            if step == "planning" and message.content and not resolved_tool_calls:
                 if looks_like_clarification_request(message.content):
                     context.messages.append(
                         {"role": "user", "content": PLANNING_CLARIFICATION_NUDGE}
@@ -454,8 +484,40 @@ class CodeAgent:
 
             if iteration_had_edit:
                 iterations_without_edit = 0
-            elif message.tool_calls:
+                context.discovery_iterations = 0
+            elif resolved_tool_calls:
                 iterations_without_edit += 1
+                if step == "editing" and not iteration_had_edit:
+                    if any(name in DISCOVERY_TOOLS for name in tool_names):
+                        context.discovery_iterations += 1
+
+            if used_embedded_tools:
+                context.messages.append(
+                    {"role": "user", "content": EMBEDDED_TOOL_NUDGE}
+                )
+
+            if iteration_had_repeated_tool:
+                context.messages.append(
+                    {"role": "user", "content": REPEATED_TOOL_NUDGE}
+                )
+                stagnant_iterations += 2
+
+            if step == "editing" and context.discovery_iterations >= 4:
+                context.messages.append(
+                    {"role": "user", "content": DISCOVERY_LOOP_NUDGE}
+                )
+                context.discovery_iterations = 0
+                stagnant_iterations += 2
+
+            if (
+                step == "editing"
+                and iterations_without_edit >= 15
+                and not context.files_modified
+            ):
+                raise RuntimeError(
+                    "Editing made no file changes after repeated discovery/tool loops. "
+                    "Aborting to avoid an infinite loop."
+                )
 
             if iteration_had_edit_failure:
                 context.messages.append(

@@ -2,6 +2,7 @@ import asyncio
 import os
 import pathlib
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -134,10 +135,56 @@ class Shell:
             return f"Error appending to file: {str(e)}"
 
     @staticmethod
+    def _resolve_venv_python() -> str | None:
+        for folder in ("venv", ".venv", "agent_venv_default"):
+            for scripts in ("Scripts", "bin"):
+                candidate = os.path.join(
+                    Shell.current_directory, folder, scripts, "python.exe"
+                )
+                if os.path.isfile(candidate):
+                    return candidate
+                candidate = os.path.join(
+                    Shell.current_directory, folder, scripts, "python"
+                )
+                if os.path.isfile(candidate):
+                    return candidate
+        return None
+
+    @staticmethod
+    def _normalize_shell_command(command: str) -> str:
+        normalized = command.strip()
+        venv_python = Shell._resolve_venv_python()
+
+        if venv_python and re.search(r"activate(\.bat|\.ps1)?", normalized, re.I):
+            normalized = re.sub(
+                r"^.*?(?:activate(?:\.bat|\.ps1)?)\s*(?:&&|;)\s*",
+                "",
+                normalized,
+                flags=re.I,
+            )
+            normalized = re.sub(
+                r"\bpython\b",
+                lambda _match: f'"{venv_python}"',
+                normalized,
+                count=1,
+            )
+        elif venv_python and normalized.startswith("python "):
+            normalized = normalized.replace("python", f'"{venv_python}"', 1)
+
+        if (
+            os.name == "nt"
+            and "&&" in normalized
+            and not normalized.lower().startswith("cmd /c")
+        ):
+            return f'cmd /c "{normalized}"'
+        return normalized
+
+    @staticmethod
     async def run_shell_command(command: str) -> str:
         try:
+            normalized = Shell._normalize_shell_command(command)
             process = await asyncio.create_subprocess_shell(
-                command,
+                normalized,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=Shell.current_directory,
@@ -147,8 +194,15 @@ class Shell:
             stderr_text = stderr.decode(errors="ignore") if stderr else ""
 
             if process.returncode == 0:
-                return stdout_text
-            return f"Error executing command: {stderr_text}"
+                output = (stdout_text or stderr_text).strip()
+                return output or "Command completed successfully with no output."
+
+            detail = (stderr_text or stdout_text).strip()
+            return (
+                f"Error executing command (exit {process.returncode}): {detail}"
+                if detail
+                else f"Error executing command (exit {process.returncode})."
+            )
         except Exception as e:
             return f"Error executing shell command: {str(e)}"
 

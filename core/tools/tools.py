@@ -110,7 +110,10 @@ FS_READ_ONLY_TOOLS = [
         "type": "function",
         "function": {
             "name": "pytest",
-            "description": "Run pytest on a specified test file.",
+            "description": (
+                "Run pytest on a test file or folder. Prefer this over run_shell_command "
+                "for tests. Example argument: tests or tests/test_api.py"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

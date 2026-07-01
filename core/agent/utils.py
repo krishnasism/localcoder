@@ -1,12 +1,16 @@
+import json
 import os
+import uuid
+from types import SimpleNamespace
 
 
-def assistant_message_to_dict(message) -> dict:
+def assistant_message_to_dict(message, tool_calls=None) -> dict:
+    calls = tool_calls if tool_calls is not None else message.tool_calls
     assistant_message = {
         "role": "assistant",
         "content": message.content or "",
     }
-    if message.tool_calls:
+    if calls:
         assistant_message["tool_calls"] = [
             {
                 "id": tool_call.id,
@@ -16,7 +20,7 @@ def assistant_message_to_dict(message) -> dict:
                     "arguments": tool_call.function.arguments,
                 },
             }
-            for tool_call in message.tool_calls
+            for tool_call in calls
         ]
     return assistant_message
 
@@ -44,6 +48,21 @@ EDIT_TOOLS = frozenset(
         "copy_file",
         "move_file_to_directory",
         "mkdir",
+    }
+)
+
+DISCOVERY_TOOLS = frozenset(
+    {
+        "list_files",
+        "get_directory_tree",
+        "read_file",
+        "find_files",
+        "search_text_in_files",
+        "run_shell_command",
+        "pytest",
+        "pytest_with_coverage",
+        "change_directory",
+        "setup_python_virtual_env",
     }
 )
 
@@ -160,6 +179,75 @@ PLANNING_NO_PLAN_NUDGE = (
     "Respond with a numbered plan of concrete file changes, then call plan_finish with "
     "that plan in the `summary` parameter. Do not reply with analysis only."
 )
+
+REPEATED_TOOL_NUDGE = (
+    "You already ran this exact tool call. Do not repeat it. Use the previous result "
+    "in context, make a concrete file edit with sed/write_file, or call finish."
+)
+
+EMBEDDED_TOOL_NUDGE = "Do not print tool JSON in chat text. Invoke tools through the tool-calling API only."
+
+DISCOVERY_LOOP_NUDGE = (
+    "Stop running discovery commands (shell, pytest collect, list_files, repeated reads). "
+    "Tests live under `tests/`. Make the next file edit from the approved plan, then "
+    "use the `pytest` tool to verify — not run_shell_command."
+)
+
+
+def tool_call_signature(tool_name: str, args: dict) -> str:
+    return f"{tool_name}:{json.dumps(args, sort_keys=True, default=str)}"
+
+
+def extract_tool_calls_from_content(content: str | None) -> list[dict]:
+    """Fallback when the model prints tool JSON in assistant text."""
+    if not content:
+        return []
+
+    calls: list[dict] = []
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(content):
+        if char != "{":
+            continue
+        try:
+            obj, _end = decoder.raw_decode(content, index)
+            if (
+                isinstance(obj, dict)
+                and isinstance(obj.get("name"), str)
+                and isinstance(obj.get("arguments"), dict)
+            ):
+                calls.append(obj)
+        except json.JSONDecodeError:
+            continue
+    return calls
+
+
+def materialize_tool_calls(tool_calls, content: str | None) -> list:
+    if tool_calls:
+        return list(tool_calls)
+
+    embedded = extract_tool_calls_from_content(content)
+    if not embedded:
+        return []
+
+    materialized = []
+    for payload in embedded:
+        materialized.append(
+            SimpleNamespace(
+                id=f"embedded-{uuid.uuid4().hex[:8]}",
+                type="function",
+                function=SimpleNamespace(
+                    name=payload["name"],
+                    arguments=json.dumps(payload.get("arguments") or {}),
+                ),
+            )
+        )
+    return materialized
+
+
+def counts_as_editing_progress(tool_name: str, result_text: str) -> bool:
+    if tool_name not in EDIT_TOOLS:
+        return False
+    return not is_tool_error(result_text) and not is_edit_failure(result_text)
 
 
 def build_execution_reminder(context) -> str:
