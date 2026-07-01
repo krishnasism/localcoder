@@ -12,6 +12,11 @@ class AgentContext:
     iteration: int = 0
     max_iterations: int = 50
 
+    plan: str = ""
+    files_modified: set[str] = field(default_factory=set)
+    files_read: set[str] = field(default_factory=set)
+    edit_failures: int = 0
+
 
 @dataclass
 class FinishResult:

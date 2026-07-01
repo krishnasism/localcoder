@@ -25,7 +25,7 @@ def build_tool_registry(finish_fn, plan_finish_fn) -> AgentToolRegistry:
     editing_tools = [
         tool
         for tool in file_system_tools
-        if tool["function"]["name"] not in {"list_files", "get_directory_tree"}
+        if tool["function"]["name"] not in {"list_files"}
     ]
 
     read_only_file_system_tools = list(FS_READ_ONLY_TOOLS)
@@ -33,7 +33,7 @@ def build_tool_registry(finish_fn, plan_finish_fn) -> AgentToolRegistry:
     read_only_planning_tools = [
         tool
         for tool in read_only_file_system_tools
-        if tool["function"]["name"] not in {"list_files", "get_directory_tree"}
+        if tool["function"]["name"] not in {"get_directory_tree"}
     ]
 
     tool_registrations = dict(TOOL_REGISTRATIONS)

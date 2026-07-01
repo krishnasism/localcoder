@@ -1,4 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { MarkdownViewer } from "./MarkdownViewer";
+import "./App.css";
 
 type StreamEvent = {
   type?: string;
@@ -9,6 +11,8 @@ type StreamEvent = {
   result?: string;
   summary?: string;
 };
+
+type ToolSlug = "coding" | "monitoring" | "research";
 
 type FeedItem =
   | {
@@ -26,17 +30,68 @@ type FeedItem =
       createdAt: string;
     };
 
+type MonitoringStreamEvent = {
+  type?: string;
+  content?: string;
+  shell?: string;
+  cwd?: string;
+  returncode?: number;
+};
+
+type MonitoringInsight = {
+  id: string;
+  content: string;
+  createdAt: string;
+  isStreaming?: boolean;
+};
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
   "http://127.0.0.1:8000";
 
 const AVAILABLE_MODELS = [
   "qwen3.6",
-  "qwen2.5",
+  "qwen2.5:7b",
   "llama-3.2",
   "llama2-uncensored:7b",
   "dolphin3:8b",
 ];
+
+const TOOL_CATALOG: Array<{
+  id: ToolSlug;
+  title: string;
+  description: string;
+  status: string;
+}> = [
+  {
+    id: "coding",
+    title: "Coding",
+    description:
+      "Copilot-style coding assistant with streaming plan, tool calls, and final output.",
+    status: "Ready",
+  },
+  {
+    id: "monitoring",
+    title: "Monitoring",
+    description:
+      "Track runtime health, active tasks, logs, and system signals for local tools.",
+    status: "Ready",
+  },
+  {
+    id: "research",
+    title: "Research",
+    description:
+      "Gather references, compare options, and organize findings for implementation work.",
+    status: "Setup",
+  },
+];
+
+function parseToolFromHash(hash: string): ToolSlug {
+  const normalized = hash.replace(/^#\/?/, "").toLowerCase();
+  if (normalized === "monitoring") return "monitoring";
+  if (normalized === "research") return "research";
+  return "coding";
+}
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -63,6 +118,11 @@ function formatEventBody(event: StreamEvent) {
   );
 }
 
+function shouldRenderMarkdown(event: StreamEvent) {
+  const markdownTypes = new Set(["assistant_message", "plan", "final"]);
+  return markdownTypes.has(event.type ?? "");
+}
+
 export default function App() {
   const [path, setPath] = useState("C:/Users/Krish/project/localcoder");
   const [query, setQuery] = useState("");
@@ -70,17 +130,96 @@ export default function App() {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTool, setActiveTool] = useState<ToolSlug>(() =>
+    parseToolFromHash(window.location.hash)
+  );
+  const [monitoringCommand, setMonitoringCommand] = useState(
+    "while ($true) { Get-Date; Start-Sleep -Seconds 2 }"
+  );
+  const [isMonitoringActive, setIsMonitoringActive] = useState(false);
+  const [liveStdout, setLiveStdout] = useState("");
+  const [liveStderr, setLiveStderr] = useState("");
+  const [streamMeta, setStreamMeta] = useState<{ shell?: string; cwd?: string }>(
+    {}
+  );
+  const [streamReturncode, setStreamReturncode] = useState<number | null>(null);
+  const [monitoringInsights, setMonitoringInsights] = useState<MonitoringInsight[]>(
+    []
+  );
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [monitoringError, setMonitoringError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const monitoringContainerRef = useRef<HTMLDivElement | null>(null);
+  const insightsContainerRef = useRef<HTMLDivElement | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const analyzeAbortRef = useRef<AbortController | null>(null);
+  const analyzeIntervalRef = useRef<number | null>(null);
+  const lastAnalyzedLengthRef = useRef(0);
+  const logsSnapshotRef = useRef({ stdout: "", stderr: "" });
 
   const canSubmit = useMemo(() => {
     return path.trim().length > 0 && query.trim().length > 0 && !isStreaming;
   }, [isStreaming, path, query]);
+
+  const userMessageCount = useMemo(
+    () => feed.filter((item) => item.role === "user").length,
+    [feed]
+  );
+
+  const agentEventCount = useMemo(
+    () => feed.filter((item) => item.role === "agent").length,
+    [feed]
+  );
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
   }, [feed]);
+
+  useEffect(() => {
+    const container = monitoringContainerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, [liveStdout, liveStderr]);
+
+  useEffect(() => {
+    const container = insightsContainerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, [monitoringInsights]);
+
+  useEffect(() => {
+    logsSnapshotRef.current = { stdout: liveStdout, stderr: liveStderr };
+  }, [liveStdout, liveStderr]);
+
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort();
+      analyzeAbortRef.current?.abort();
+      if (analyzeIntervalRef.current !== null) {
+        window.clearInterval(analyzeIntervalRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      setActiveTool(parseToolFromHash(window.location.hash));
+    };
+
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  function navigateToTool(tool: ToolSlug) {
+    const nextHash = `#/${tool}`;
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash;
+      return;
+    }
+    setActiveTool(tool);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -197,72 +336,514 @@ export default function App() {
     }
   }
 
+  async function consumeSseStream(
+    response: Response,
+    onPayload: (payload: Record<string, unknown>) => void
+  ) {
+    if (!response.body) {
+      throw new Error("Streaming response body is not available.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+
+      for (const frame of frames) {
+        const dataLines = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => line.slice(6));
+
+        if (dataLines.length === 0) continue;
+        onPayload(JSON.parse(dataLines.join("\n")));
+      }
+    }
+
+    const remaining = buffer.trim();
+    if (remaining.startsWith("data: ")) {
+      onPayload(JSON.parse(remaining.slice(6)));
+    }
+  }
+
+  function stopMonitoringStream(abortAnalyze = false) {
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+
+    if (abortAnalyze) {
+      analyzeAbortRef.current?.abort();
+      analyzeAbortRef.current = null;
+      setIsAnalyzing(false);
+    }
+
+    if (analyzeIntervalRef.current !== null) {
+      window.clearInterval(analyzeIntervalRef.current);
+      analyzeIntervalRef.current = null;
+    }
+
+    setIsMonitoringActive(false);
+  }
+
+  function stopMonitoringSession() {
+    stopMonitoringStream(true);
+  }
+
+  async function requestMonitoringInsight(command: string, force = false) {
+    const { stdout, stderr } = logsSnapshotRef.current;
+    const combinedLogs = `${stdout}${stderr}`;
+    const nextLength = combinedLogs.length;
+
+    if (!force && nextLength <= lastAnalyzedLengthRef.current) {
+      return;
+    }
+
+    lastAnalyzedLengthRef.current = nextLength;
+    analyzeAbortRef.current?.abort();
+    const abortController = new AbortController();
+    analyzeAbortRef.current = abortController;
+
+    const insightId = createId();
+    setIsAnalyzing(true);
+    setMonitoringInsights((current) => [
+      ...current,
+      {
+        id: insightId,
+        content: "",
+        createdAt: new Date().toISOString(),
+        isStreaming: true,
+      },
+    ]);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/monitoring/analyze/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          command,
+          cwd: path.trim() || undefined,
+          logs: combinedLogs,
+          model,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Insight request failed with status ${response.status}`);
+      }
+
+      await consumeSseStream(response, (payload) => {
+        if (payload.type === "insight_delta" && typeof payload.content === "string") {
+          setMonitoringInsights((current) =>
+            current.map((item) =>
+              item.id === insightId
+                ? { ...item, content: item.content + payload.content }
+                : item
+            )
+          );
+        }
+
+        if (payload.type === "insight_done") {
+          setMonitoringInsights((current) =>
+            current.map((item) =>
+              item.id === insightId ? { ...item, isStreaming: false } : item
+            )
+          );
+        }
+
+        if (payload.type === "insight_error" && typeof payload.message === "string") {
+          setMonitoringInsights((current) =>
+            current.map((item) =>
+              item.id === insightId
+                ? {
+                    ...item,
+                    content: payload.message as string,
+                    isStreaming: false,
+                  }
+                : item
+            )
+          );
+        }
+      });
+    } catch (insightError) {
+      if (
+        abortController.signal.aborted ||
+        (insightError instanceof DOMException && insightError.name === "AbortError")
+      ) {
+        setMonitoringInsights((current) =>
+          current.filter((item) => item.id !== insightId || item.content.length > 0)
+        );
+        return;
+      }
+
+      const message =
+        insightError instanceof Error
+          ? insightError.message
+          : "Unknown insight error";
+
+      setMonitoringInsights((current) =>
+        current.map((item) =>
+          item.id === insightId
+            ? {
+                ...item,
+                content: message,
+                isStreaming: false,
+              }
+            : item
+        )
+      );
+    } finally {
+      if (analyzeAbortRef.current === abortController) {
+        analyzeAbortRef.current = null;
+      }
+      setIsAnalyzing(false);
+    }
+  }
+
+  async function startMonitoringSession(command: string) {
+    setMonitoringError(null);
+    setLiveStdout("");
+    setLiveStderr("");
+    setStreamMeta({});
+    setStreamReturncode(null);
+    setMonitoringInsights([]);
+    lastAnalyzedLengthRef.current = 0;
+    logsSnapshotRef.current = { stdout: "", stderr: "" };
+
+    streamAbortRef.current?.abort();
+    const abortController = new AbortController();
+    streamAbortRef.current = abortController;
+
+    setIsMonitoringActive(true);
+
+    analyzeIntervalRef.current = window.setInterval(() => {
+      void requestMonitoringInsight(command);
+    }, 12000);
+
+    let sessionStdout = "";
+    let sessionStderr = "";
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/monitoring/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          command,
+          cwd: path.trim() || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error(
+            "Monitoring stream endpoint not found. Restart backend with: uvicorn api:app --reload"
+          );
+        }
+        throw new Error(`Monitoring stream failed with status ${response.status}`);
+      }
+
+      await consumeSseStream(response, (payload) => {
+        const event = payload as MonitoringStreamEvent;
+
+        if (event.type === "start") {
+          setStreamMeta({ shell: event.shell, cwd: event.cwd });
+          return;
+        }
+
+        if (event.type === "stdout" && event.content) {
+          sessionStdout += event.content;
+          logsSnapshotRef.current = {
+            stdout: sessionStdout,
+            stderr: sessionStderr,
+          };
+          setLiveStdout(sessionStdout);
+          return;
+        }
+
+        if (event.type === "stderr" && event.content) {
+          sessionStderr += event.content;
+          logsSnapshotRef.current = {
+            stdout: sessionStdout,
+            stderr: sessionStderr,
+          };
+          setLiveStderr(sessionStderr);
+          return;
+        }
+
+        if (event.type === "end" && typeof event.returncode === "number") {
+          setStreamReturncode(event.returncode);
+          stopMonitoringStream(false);
+          void requestMonitoringInsight(command, true);
+        }
+      });
+    } catch (streamError) {
+      if (streamError instanceof DOMException && streamError.name === "AbortError") {
+        return;
+      }
+
+      const message =
+        streamError instanceof Error
+          ? streamError.message
+          : "Unknown monitoring stream error";
+
+      setMonitoringError(message);
+      stopMonitoringStream(true);
+    } finally {
+      if (streamAbortRef.current === abortController) {
+        streamAbortRef.current = null;
+      }
+      setIsMonitoringActive(false);
+    }
+  }
+
+  function handleMonitoringToggle() {
+    if (isMonitoringActive) {
+      stopMonitoringSession();
+      return;
+    }
+
+    const command = monitoringCommand.trim();
+    if (!command) {
+      setMonitoringError("Enter a command before starting monitoring.");
+      return;
+    }
+
+    void startMonitoringSession(command);
+  }
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#0b1020",
-        color: "#e5e7eb",
-        padding: 24,
-        fontFamily:
-          'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      }}
-    >
+    <div className="app-shell">
       <div
-        style={{
-          maxWidth: 1100,
-          margin: "0 auto",
-          display: "grid",
-          gap: 16,
-        }}
+        className={`app-container ${
+          activeTool === "coding" ? "app-container-coding" : "app-container-tool"
+        }`}
       >
-        <header>
-          <h1 style={{ margin: 0, fontSize: 28 }}>LocalCoder Chat</h1>
-          <p style={{ margin: "8px 0 0", color: "#94a3b8" }}>
-            Your friendly and cheap AI Assistant.
-          </p>
+        <header className="app-header">
+          <div>
+            <h1 className="app-title">Coolbot</h1>
+            <p className="app-subtitle">
+              Your local copilot
+            </p>
+          </div>
+          <div className="header-chips" aria-label="Session overview">
+            <span className="chip">Model: {model}</span>
+            <span className="chip">Prompts: {userMessageCount}</span>
+            <span className="chip">Events: {agentEventCount}</span>
+            <span className={`chip ${isStreaming ? "chip-live" : "chip-idle"}`}>
+              {isStreaming ? "Live" : "Idle"}
+            </span>
+          </div>
         </header>
 
-        <form
-          onSubmit={handleSubmit}
-          style={{
-            display: "grid",
-            gap: 12,
-            padding: 16,
-            background: "#111827",
-            border: "1px solid #1f2937",
-            borderRadius: 14,
-          }}
-        >
-          <label style={{ display: "grid", gap: 6 }}>
-            <span style={{ fontSize: 14, color: "#cbd5e1" }}>Path</span>
+        <section className="catalog-panel" aria-label="Tool catalog">
+          <div className="catalog-header-row">
+            <h2 className="catalog-title">Local Tools</h2>
+            <span className="catalog-hint">Choose a tool to continue</span>
+          </div>
+          <div className="catalog-grid">
+            {TOOL_CATALOG.map((tool) => {
+              const isActive = activeTool === tool.id;
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  className={`tool-card ${isActive ? "tool-card-active" : ""}`}
+                  onClick={() => navigateToTool(tool.id)}
+                >
+                  <div className="tool-card-top">
+                    <h3 className="tool-card-title">{tool.title}</h3>
+                    <span className="tool-card-status">{tool.status}</span>
+                  </div>
+                  <p className="tool-card-description">{tool.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {activeTool !== "coding" ? (
+          <section
+            className={`tool-landing ${
+              activeTool === "monitoring" ? "tool-landing-monitoring" : ""
+            }`}
+            aria-label={`${activeTool} tool`}
+          >
+            <h2 className="tool-landing-title">
+              {activeTool === "monitoring" ? "Monitoring" : "Research"}
+            </h2>
+            {activeTool === "monitoring" ? (
+              <div className="monitoring-layout">
+                <div className="monitoring-main">
+                  <p className="tool-landing-text">
+                    Run a shell command and stream output in real time. Use loops
+                    or long-running commands (for example watch-style polling).
+                  </p>
+
+                  <label className="field monitoring-path-field">
+                    <span className="field-label">Working directory</span>
+                    <input
+                      value={path}
+                      onChange={(event) => setPath(event.target.value)}
+                      placeholder="Project path"
+                      className="field-control"
+                      disabled={isMonitoringActive}
+                    />
+                  </label>
+
+                  <label className="field monitoring-command-field">
+                    <span className="field-label">Command</span>
+                    <input
+                      value={monitoringCommand}
+                      onChange={(event) => setMonitoringCommand(event.target.value)}
+                      placeholder="Enter command to monitor"
+                      className="field-control monitoring-command-control"
+                      disabled={isMonitoringActive}
+                    />
+                  </label>
+
+                  <div className="monitoring-status-row">
+                    <span
+                      className={`chip ${isMonitoringActive ? "chip-live" : "chip-idle"}`}
+                    >
+                      {isMonitoringActive ? "Monitoring live" : "Monitoring idle"}
+                    </span>
+                    {streamMeta.shell || streamMeta.cwd ? (
+                      <span className="monitoring-meta">
+                        {streamMeta.shell ? `shell: ${streamMeta.shell}` : ""}
+                        {streamMeta.shell && streamMeta.cwd ? " · " : ""}
+                        {streamMeta.cwd ? `cwd: ${streamMeta.cwd}` : ""}
+                      </span>
+                    ) : null}
+                    {streamReturncode !== null ? (
+                      <span className="monitoring-exit">
+                        exit code: {streamReturncode}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div ref={monitoringContainerRef} className="monitoring-output">
+                    {!liveStdout && !liveStderr ? (
+                      <div className="monitoring-placeholder">
+                        Output will appear here once monitoring starts. Try a loop
+                        like: while ($true) {"{"} Get-Date; Start-Sleep 2 {"}"}
+                      </div>
+                    ) : null}
+                    {liveStdout ? (
+                      <pre className="monitoring-stdout">{liveStdout}</pre>
+                    ) : null}
+                    {liveStderr ? (
+                      <pre className="monitoring-stderr">{liveStderr}</pre>
+                    ) : null}
+                  </div>
+
+                  {monitoringError ? (
+                    <span className="error-text">{monitoringError}</span>
+                  ) : null}
+                </div>
+
+                <aside className="monitoring-sidebar" aria-label="Monitoring agent">
+                  <div className="monitoring-sidebar-header">
+                    <h3 className="monitoring-sidebar-title">Local Agent</h3>
+                    <p className="monitoring-sidebar-subtitle">
+                      The model explains what to watch for and what the logs mean.
+                    </p>
+                  </div>
+
+                  <label className="field monitoring-model-field">
+                    <span className="field-label">Model</span>
+                    <select
+                      value={model}
+                      onChange={(event) => setModel(event.target.value)}
+                      disabled={isMonitoringActive || isAnalyzing}
+                      className="field-control"
+                    >
+                      {AVAILABLE_MODELS.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <button
+                    type="button"
+                    className={`send-button monitoring-toggle-button ${
+                      isMonitoringActive ? "monitoring-toggle-stop" : ""
+                    }`}
+                    onClick={handleMonitoringToggle}
+                    disabled={!isMonitoringActive && !monitoringCommand.trim()}
+                  >
+                    {isMonitoringActive ? "Stop monitoring" : "Start monitoring"}
+                  </button>
+
+                  <div ref={insightsContainerRef} className="monitoring-insights">
+                    {monitoringInsights.length === 0 ? (
+                      <div className="monitoring-insight-placeholder">
+                        Start monitoring to get guidance on the command and live
+                        output.
+                      </div>
+                    ) : null}
+
+                    {monitoringInsights.map((insight) => (
+                      <article key={insight.id} className="monitoring-insight-card">
+                        <div className="monitoring-insight-meta">
+                          <span>Agent insight</span>
+                          <span>
+                            {new Date(insight.createdAt).toLocaleTimeString()}
+                            {insight.isStreaming ? " · live" : ""}
+                          </span>
+                        </div>
+                        <MarkdownViewer
+                          content={
+                            insight.content ||
+                            (insight.isStreaming ? "Analyzing output..." : "")
+                          }
+                          className="monitoring-insight-body markdown-body"
+                        />
+                      </article>
+                    ))}
+                  </div>
+                </aside>
+              </div>
+            ) : (
+              <p className="tool-landing-text">
+                Research tool page is active. Next step can be adding source
+                discovery, notes, and citation workflows.
+              </p>
+            )}
+          </section>
+        ) : null}
+
+        {activeTool === "coding" ? (
+          <form onSubmit={handleSubmit} className="chat-form">
+          <label className="field">
+            <span className="field-label">Path</span>
             <input
               value={path}
               onChange={(event) => setPath(event.target.value)}
               placeholder="Project path"
-              style={{
-                padding: "12px 14px",
-                borderRadius: 10,
-                border: "1px solid #334155",
-                background: "#020617",
-                color: "#f8fafc",
-              }}
+              className="field-control"
             />
           </label>
 
-          <label style={{ display: "grid", gap: 6 }}>
-            <span style={{ fontSize: 14, color: "#cbd5e1" }}>Model</span>
+          <label className="field">
+            <span className="field-label">Model</span>
             <select
               value={model}
               onChange={(event) => setModel(event.target.value)}
               disabled={isStreaming}
-              style={{
-                padding: "12px 14px",
-                borderRadius: 10,
-                border: "1px solid #334155",
-                background: "#020617",
-                color: "#f8fafc",
-              }}
+              className="field-control"
             >
               {AVAILABLE_MODELS.map((m) => (
                 <option key={m} value={m}>
@@ -272,87 +853,55 @@ export default function App() {
             </select>
           </label>
 
-          <label style={{ display: "grid", gap: 6 }}>
-            <span style={{ fontSize: 14, color: "#cbd5e1" }}>Query</span>
+          <label className="field">
+            <span className="field-label">Query</span>
             <textarea
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Tell the agent what to do"
               rows={4}
-              style={{
-                padding: "12px 14px",
-                borderRadius: 10,
-                border: "1px solid #334155",
-                background: "#020617",
-                color: "#f8fafc",
-                resize: "vertical",
-              }}
+              className="field-control field-textarea"
             />
           </label>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="form-actions">
             <button
               type="submit"
               disabled={!canSubmit}
-              style={{
-                padding: "10px 16px",
-                borderRadius: 10,
-                border: "none",
-                background: canSubmit ? "#2563eb" : "#334155",
-                color: "white",
-                cursor: canSubmit ? "pointer" : "not-allowed",
-                fontWeight: 600,
-              }}
+              className="send-button"
             >
               {isStreaming ? "Working..." : "Send"}
             </button>
-            <span style={{ color: "#94a3b8", fontSize: 14 }}>
+            <span className="api-hint">
               API: {API_BASE_URL}
             </span>
           </div>
-          {error ? <span style={{ color: "#fca5a5" }}>{error}</span> : null}
-        </form>
+          {error ? <span className="error-text">{error}</span> : null}
+          </form>
+        ) : null}
 
-        <section
-          ref={containerRef}
-          style={{
-            minHeight: 480,
-            maxHeight: "calc(100vh - 280px)",
-            overflowY: "auto",
-            padding: 16,
-            background: "#111827",
-            border: "1px solid #1f2937",
-            borderRadius: 14,
-            display: "grid",
-            gap: 12,
-          }}
-        >
+        {activeTool === "coding" ? (
+          <section ref={containerRef} className="feed-panel">
           {feed.length === 0 ? (
-            <div style={{ color: "#94a3b8" }}>
-              No events yet. Send a request to start streaming.
+            <div className="empty-feed">
+              <h2 className="empty-title">No events yet</h2>
+              <p className="empty-text">
+                Enter a path and prompt, then click Send to watch the agent stream
+                planning, tool calls, and final results in real time.
+              </p>
             </div>
           ) : null}
 
           {feed.map((item) => {
             if (item.role === "user") {
               return (
-                <article
-                  key={item.id}
-                  style={{
-                    justifySelf: "end",
-                    maxWidth: "75%",
-                    padding: 14,
-                    borderRadius: 14,
-                    background: "#1d4ed8",
-                    color: "#eff6ff",
-                  }}
-                >
-                  <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
-                    You � {new Date(item.createdAt).toLocaleTimeString()}
-                    {" � "}Model: {item.model}
+                <article key={item.id} className="feed-item feed-item-user">
+                  <div className="feed-item-meta feed-item-meta-user">
+                    You - {new Date(item.createdAt).toLocaleTimeString()}
+                    {" - "}Model: {item.model}
                   </div>
-                  <div style={{ fontWeight: 600, marginBottom: 8 }}>{item.query}</div>
-                  <div style={{ fontSize: 12, opacity: 0.9 }}>{item.path}</div>
+                  <div className="feed-item-user-query">{item.query}</div>
+                  <div className="feed-item-user-path">{item.path}</div>
                 </article>
               );
             }
@@ -360,50 +909,38 @@ export default function App() {
             const label = formatEventLabel(item.event);
             const body = formatEventBody(item.event);
             const isError = item.event.type === "error";
+            const useMarkdown = shouldRenderMarkdown(item.event);
 
             return (
               <article
                 key={item.id}
-                style={{
-                  justifySelf: "start",
-                  maxWidth: "85%",
-                  padding: 14,
-                  borderRadius: 14,
-                  background: isError ? "#450a0a" : "#0f172a",
-                  border: `1px solid ${isError ? "#7f1d1d" : "#1e293b"}`,
-                }}
+                className={`feed-item feed-item-agent ${
+                  isError ? "feed-item-agent-error" : ""
+                }`}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    marginBottom: 8,
-                    fontSize: 12,
-                    color: "#94a3b8",
-                  }}
-                >
+                <div className="feed-item-meta">
                   <span>{label}</span>
                   <span>{new Date(item.createdAt).toLocaleTimeString()}</span>
                 </div>
-                <pre
-                  style={{
-                    margin: 0,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    fontFamily:
-                      'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-                    fontSize: 13,
-                    lineHeight: 1.5,
-                    color: isError ? "#fecaca" : "#e2e8f0",
-                  }}
-                >
-                  {body}
-                </pre>
+                {useMarkdown ? (
+                  <MarkdownViewer
+                    content={body}
+                    className={`feed-body markdown-body ${
+                      isError ? "feed-body-error" : ""
+                    }`}
+                  />
+                ) : (
+                  <pre
+                    className={`feed-body ${isError ? "feed-body-error" : ""}`}
+                  >
+                    {body}
+                  </pre>
+                )}
               </article>
             );
           })}
-        </section>
+          </section>
+        ) : null}
       </div>
     </div>
   );

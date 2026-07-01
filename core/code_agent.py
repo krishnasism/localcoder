@@ -5,7 +5,11 @@ from core.agent.models import AgentContext, FinishResult
 from core.agent.prompts import PLANNING_SYSTEM_PROMPT, SYSTEM_PROMPT
 from core.agent.toolsets import build_tool_registry
 from core.agent.utils import (
+    EDIT_TOOLS,
     assistant_message_to_dict,
+    build_execution_reminder,
+    is_edit_failure,
+    is_tool_error,
     resolve_target_directory,
     truncate_for_context,
 )
@@ -124,6 +128,7 @@ class CodeAgent:
         }
 
     async def __call_llm(self, context: AgentContext, tools: list) -> str:
+        logging.info(f"Model: {self.model}, Tools: {tools}")
         return await self.client.chat.completions.create(
             model=self.model,
             messages=context.messages,
@@ -160,6 +165,26 @@ class CodeAgent:
     def _fallback_plan(prompt: str) -> str:
         return f"Task focus: {prompt}"
 
+    def _track_tool_usage(
+        self, context: AgentContext, tool_name: str, args: dict, result: str
+    ) -> None:
+        if tool_name == "read_file" and not is_tool_error(result):
+            filename = args.get("filename")
+            if filename:
+                context.files_read.add(filename)
+            return
+
+        if tool_name not in EDIT_TOOLS:
+            return
+
+        if is_tool_error(result) or is_edit_failure(result):
+            context.edit_failures += 1
+            return
+
+        filename = args.get("filename") or args.get("src")
+        if filename:
+            context.files_modified.add(filename)
+
     async def _execute_tool(
         self,
         tool_call,
@@ -185,64 +210,49 @@ class CodeAgent:
             return await result
         return result
 
-    async def generate_plan_of_action(
+    def _build_initial_user_message(self, prompt: str, path: str, change_dir_result: str, initial_files: str, initial_tree: str) -> str:
+        return (
+            f"{prompt}\n"
+            f"Target file or folder: {path}\n"
+            f"Directory setup: {change_dir_result}\n"
+            f"Current working directory: {Shell.current_directory}\n\n"
+            "Initial project snapshot (already gathered; do not call list_files/get_directory_tree again):\n"
+            f"Files:\n{initial_files}\n\n"
+            f"Tree:\n{initial_tree}"
+        )
+
+    async def _run_agent_loop(
         self,
-        prompt: str,
-        path: str,
+        context: AgentContext,
+        tools: list,
+        tool_registrations: dict,
+        step: str,
+        finish_tool: str,
         on_event: EventCallback | None = None,
+        on_finish: Callable[[str], Awaitable[str | None]] | None = None,
+        structure_only_tools: set[str] | None = None,
+        stagnant_limit: int = 4,
+        structure_only_limit: int = 3,
     ) -> str:
-        self.agent_state_manager.update_state("planning")
-        await self._emit(
-            on_event,
-            {"type": "status", "step": "planning", "message": "Planning started."},
-        )
-
-        target_dir = resolve_target_directory(path)
-        change_dir_result = await Shell.change_directory(target_dir)
-        initial_files = truncate_for_context(await Shell.list_files())
-        initial_tree = truncate_for_context(await Shell.get_directory_tree())
-
-        context = AgentContext(
-            current_task=prompt,
-            working_directory=Shell.current_directory,
-            max_iterations=self.config.max_iterations,
-        )
-        context.messages = [
-            {
-                "role": "system",
-                "content": PLANNING_SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"{prompt}\n"
-                    f"Target file or folder: {path}\n"
-                    f"Directory setup: {change_dir_result}\n"
-                    f"Current working directory: {Shell.current_directory}\n\n"
-                    "Initial project snapshot (already gathered; do not call list_files/get_directory_tree again):\n"
-                    f"Files:\n{initial_files}\n\n"
-                    f"Tree:\n{initial_tree}"
-                ),
-            },
-        ]
-
-        allowed_planning_tools = self._allowed_tool_names(self.read_only_planning_tools)
+        allowed_tools = self._allowed_tool_names(tools)
+        structure_only_tools = structure_only_tools or {"list_files", "get_directory_tree"}
         consecutive_structure_only_iterations = 0
         stagnant_iterations = 0
+        iterations_without_edit = 0
 
         while context.iteration < context.max_iterations:
             context.iteration += 1
             logger.info(f"Iteration {context.iteration} of {context.max_iterations}")
-            self.agent_state_manager.update_state("planning")
+            self.agent_state_manager.update_state(step)
             await self._emit(
                 on_event,
                 {
                     "type": "status",
-                    "step": "planning",
-                    "message": f"Planning iteration {context.iteration}/{context.max_iterations}",
+                    "step": step,
+                    "message": f"{step.title()} iteration {context.iteration}/{context.max_iterations}",
                 },
             )
-            response = await self.__call_llm(context, self.read_only_planning_tools)
+            response = await self.__call_llm(context, tools)
             message = response.choices[0].message
 
             context.messages.append(assistant_message_to_dict(message))
@@ -252,7 +262,7 @@ class CodeAgent:
                     on_event,
                     {
                         "type": "assistant_message",
-                        "step": "planning",
+                        "step": step,
                         "content": message.content,
                     },
                 )
@@ -260,55 +270,68 @@ class CodeAgent:
 
             tool_names = []
             iteration_had_progress = False
+            iteration_had_edit = False
+            iteration_had_edit_failure = False
+
             for tool_call in message.tool_calls or []:
                 tool_names.append(tool_call.function.name)
-                if tool_call.function.name == "plan_finish":
-                    logger.info("Plan finished successfully.")
-                    self.agent_state_manager.update_state("planning_completed")
-                    summary = message.content or "Planning completed."
+                if tool_call.function.name == finish_tool:
+                    logger.info(f"{finish_tool} called successfully.")
+                    summary = message.content or f"{step.title()} completed."
+                    if on_finish is not None:
+                        resolved = await on_finish(summary)
+                        if resolved is not None:
+                            summary = resolved
                     await self._emit(
                         on_event,
                         {
                             "type": "status",
-                            "step": "planning",
-                            "message": "Planning completed.",
+                            "step": step,
+                            "message": f"{step.title()} completed.",
                             "summary": summary,
                         },
                     )
                     return summary
                 try:
+                    args = self._safe_load_tool_args(tool_call.function.arguments)
                     await self._emit(
                         on_event,
                         {
                             "type": "tool_start",
-                            "step": "planning",
+                            "step": step,
                             "tool": tool_call.function.name,
                         },
                     )
                     result = await self._execute_tool(
                         tool_call,
-                        self.read_only_tool_registrations,
-                        allowed_tool_names=allowed_planning_tools,
+                        tool_registrations,
+                        allowed_tool_names=allowed_tools,
                     )
+                    result_text = str(result)
+                    self._track_tool_usage(
+                        context, tool_call.function.name, args, result_text
+                    )
+                    if tool_call.function.name in EDIT_TOOLS:
+                        iteration_had_edit = True
+                        if is_edit_failure(result_text) or is_tool_error(result_text):
+                            iteration_had_edit_failure = True
                     await self._emit(
                         on_event,
                         {
                             "type": "tool_result",
-                            "step": "planning",
+                            "step": step,
                             "tool": tool_call.function.name,
-                            "result": str(result),
+                            "result": result_text,
                         },
                     )
                     context.tool_results[tool_call.id] = result
-                    if not str(result).startswith("Tool '") and not str(
-                        result
-                    ).startswith("Unknown tool"):
+                    if not is_tool_error(result_text):
                         iteration_had_progress = True
 
                     context.messages.append(
                         {
                             "role": "tool",
-                            "content": str(result),
+                            "content": result_text,
                             "tool_call_id": tool_call.id,
                         }
                     )
@@ -320,7 +343,7 @@ class CodeAgent:
                         on_event,
                         {
                             "type": "error",
-                            "step": "planning",
+                            "step": step,
                             "message": error_message,
                         },
                     )
@@ -334,7 +357,8 @@ class CodeAgent:
                     )
 
             if (
-                message.content
+                step == "planning"
+                and message.content
                 and not (message.tool_calls or [])
                 and self._looks_like_plan(message.content)
             ):
@@ -346,61 +370,153 @@ class CodeAgent:
             else:
                 stagnant_iterations += 1
 
-            if stagnant_iterations >= 4:
+            if iteration_had_edit:
+                iterations_without_edit = 0
+            elif message.tool_calls:
+                iterations_without_edit += 1
+
+            if iteration_had_edit_failure:
                 context.messages.append(
                     {
                         "role": "user",
                         "content": (
-                            "You are looping. Stop exploring. Produce a concise plan now and call plan_finish. "
-                            "Do not call tools unless strictly necessary."
+                            "The last edit failed. Read the target file once, copy the exact "
+                            "text you need to change, then retry with `sed` or `write_file`. "
+                            "Do not explore unrelated files."
                         ),
                     }
                 )
 
-            if stagnant_iterations >= 8:
-                fallback = self._fallback_plan(prompt)
-                await self.plan_finish(summary=fallback)
-                await self._emit(
-                    on_event,
+            if step == "editing" and iterations_without_edit >= 2:
+                context.messages.append(
                     {
-                        "type": "status",
-                        "step": "planning",
-                        "message": "Using fallback plan.",
-                        "summary": fallback,
-                    },
+                        "role": "user",
+                        "content": build_execution_reminder(context),
+                    }
                 )
-                return fallback
+                iterations_without_edit = 0
 
-            if tool_names and set(tool_names).issubset(
-                {"list_files", "get_directory_tree"}
-            ):
+            if stagnant_iterations >= stagnant_limit:
+                nudge = (
+                    "You are looping. Produce a concise plan now and call plan_finish. "
+                    "Do not call tools unless strictly necessary."
+                    if step == "planning"
+                    else (
+                        "You are looping without making edits. Execute the next concrete "
+                        "file change from the approved plan, then call finish."
+                    )
+                )
+                context.messages.append({"role": "user", "content": nudge})
+
+            if stagnant_iterations >= stagnant_limit * 2:
+                if step == "planning":
+                    fallback = self._fallback_plan(context.current_task)
+                    await self.plan_finish(summary=fallback)
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "status",
+                            "step": step,
+                            "message": "Using fallback plan.",
+                            "summary": fallback,
+                        },
+                    )
+                    return fallback
+                context.messages.append(
+                    {
+                        "role": "user",
+                        "content": build_execution_reminder(context),
+                    }
+                )
+
+            if tool_names and set(tool_names).issubset(structure_only_tools):
                 consecutive_structure_only_iterations += 1
             else:
                 consecutive_structure_only_iterations = 0
 
-            if consecutive_structure_only_iterations >= 3:
-                context.messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Stop repeating project structure inspection. "
-                            "You already have enough structure context. "
-                            "Read only files directly relevant to the task and then call plan_finish."
-                        ),
-                    }
+            if consecutive_structure_only_iterations >= structure_only_limit:
+                structure_nudge = (
+                    "Stop repeating project structure inspection. "
+                    "You already have enough structure context. "
+                    "Read only files directly relevant to the task and then call plan_finish."
+                    if step == "planning"
+                    else (
+                        "Stop repeating structure inspection. "
+                        "Use the approved plan and perform concrete file edits now. "
+                        "Then call finish."
+                    )
                 )
+                context.messages.append({"role": "user", "content": structure_nudge})
 
-            if consecutive_structure_only_iterations >= 6:
-                self.agent_state_manager.update_state("error")
-                raise RuntimeError(
-                    "Planning is stuck in repeated list_files/get_directory_tree calls. "
-                    "Aborting to avoid an infinite loop."
-                )
+            if consecutive_structure_only_iterations >= structure_only_limit * 2:
+                if step == "planning":
+                    context.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You are stuck in repeated list_files/get_directory_tree calls. "
+                                "Stop exploring. Produce a concise plan now and call plan_finish."
+                            ),
+                        }
+                    )
+                else:
+                    raise RuntimeError(
+                        "Editing is stuck in repeated list_files/get_directory_tree calls. "
+                        "Aborting to avoid an infinite loop."
+                    )
 
         self.agent_state_manager.update_state("error")
         raise RuntimeError(
-            "Planning phase reached max iterations without calling plan_finish. "
+            f"{step.title()} phase reached max iterations without calling {finish_tool}. "
             "Model likely did not emit the required completion tool call."
+        )
+
+    async def generate_plan_of_action(
+        self,
+        prompt: str,
+        path: str,
+        on_event: EventCallback | None = None,
+        context: AgentContext | None = None,
+    ) -> str:
+        if context is None:
+            self.agent_state_manager.update_state("planning")
+            await self._emit(
+                on_event,
+                {"type": "status", "step": "planning", "message": "Planning started."},
+            )
+
+            target_dir = resolve_target_directory(path)
+            change_dir_result = await Shell.change_directory(target_dir)
+            initial_files = truncate_for_context(await Shell.list_files())
+            initial_tree = truncate_for_context(await Shell.get_directory_tree())
+
+            context = AgentContext(
+                current_task=prompt,
+                working_directory=Shell.current_directory,
+                max_iterations=self.config.max_iterations,
+            )
+            context.messages = [
+                {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": self._build_initial_user_message(
+                        prompt, path, change_dir_result, initial_files, initial_tree
+                    ),
+                },
+            ]
+
+        async def _plan_finish(summary: str) -> str:
+            await self.plan_finish(summary=summary)
+            return summary
+
+        return await self._run_agent_loop(
+            context=context,
+            tools=self.read_only_planning_tools,
+            tool_registrations=self.read_only_tool_registrations,
+            step="planning",
+            finish_tool="plan_finish",
+            on_event=on_event,
+            on_finish=_plan_finish,
         )
 
     async def generate_code(
@@ -430,25 +546,19 @@ class CodeAgent:
             max_iterations=self.config.max_iterations,
         )
         context.messages = [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
+            {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": (
-                    f"{prompt}\n"
-                    f"Target file: {path}\n"
-                    f"DirTectory setup: {change_dir_result}\n"
-                    f"Current working directory: {Shell.current_directory}\n\n"
-                    "Initial project snapshot (already gathered; do not call list_files/get_directory_tree again):\n"
-                    f"Files:\n{initial_files}\n\n"
-                    f"Tree:\n{initial_tree}"
+                "content": self._build_initial_user_message(
+                    prompt, path, change_dir_result, initial_files, initial_tree
                 ),
             },
         ]
 
-        plan = await self.generate_plan_of_action(prompt, path, on_event=on_event)
+        plan = await self.generate_plan_of_action(
+            prompt, path, on_event=on_event, context=context
+        )
+        context.plan = plan
         await self._emit(
             on_event,
             {
@@ -457,188 +567,40 @@ class CodeAgent:
                 "content": plan,
             },
         )
+        logger.debug(f"Plan generated: {context.plan}")
+
+        context.messages[0] = {"role": "system", "content": SYSTEM_PROMPT}
+        context.iteration = 0
         context.messages.append(
             {
                 "role": "user",
                 "content": (
-                    "Original task to complete:\n"
+                    "Planning is complete. Switch to execution mode.\n\n"
+                    "Original task:\n"
                     f"{prompt}\n\n"
-                    "Approved plan to execute:\n"
-                    f"{plan}\n"
-                    "Planning is complete. Do not ask for the task again. "
-                    "Use the original task and approved plan above, perform the edits, and call finish when done."
+                    "Approved plan:\n"
+                    f"{context.plan}\n\n"
+                    "Execute this plan now. Your prior file reads in this conversation "
+                    "are still valid — do not restart discovery. "
+                    "Make concrete edits one step at a time and call finish when done."
                 ),
             }
         )
 
-        allowed_editing_tools = self._allowed_tool_names(self.editing_tools)
-        consecutive_structure_only_iterations = 0
-        stagnant_iterations = 0
+        async def _on_finish(summary: str) -> str:
+            self.agent_state_manager.update_state("completed")
+            await self.finish(summary=summary)
+            return summary
 
-        while context.iteration < context.max_iterations:
-            context.iteration += 1
-            logger.info(f"Iteration {context.iteration} of {context.max_iterations}")
-            await self._emit(
-                on_event,
-                {
-                    "type": "status",
-                    "step": "editing",
-                    "message": f"Editing iteration {context.iteration}/{context.max_iterations}",
-                },
-            )
-
-            self.agent_state_manager.update_state("editing")
-            response = await self.__call_llm(context, self.editing_tools)
-            message = response.choices[0].message
-            context.messages.append(assistant_message_to_dict(message))
-
-            if message.content:
-                await self._emit(
-                    on_event,
-                    {
-                        "type": "assistant_message",
-                        "step": "editing",
-                        "content": message.content,
-                    },
-                )
-                logger.info(f"LLM Response: {message.content}")
-
-            tool_names = []
-            iteration_had_progress = False
-            for tool_call in message.tool_calls or []:
-                tool_names.append(tool_call.function.name)
-                if tool_call.function.name == "finish":
-                    logger.info("Task completed successfully.")
-                    self.agent_state_manager.update_state("completed")
-                    summary = message.content or "Task completed."
-                    await self._emit(
-                        on_event,
-                        {
-                            "type": "status",
-                            "step": "completed",
-                            "message": "Task completed successfully.",
-                            "summary": summary,
-                        },
-                    )
-                    return summary
-                try:
-                    await self._emit(
-                        on_event,
-                        {
-                            "type": "tool_start",
-                            "step": "editing",
-                            "tool": tool_call.function.name,
-                        },
-                    )
-                    result = await self._execute_tool(
-                        tool_call,
-                        self.tool_registrations,
-                        allowed_tool_names=allowed_editing_tools,
-                    )
-                    await self._emit(
-                        on_event,
-                        {
-                            "type": "tool_result",
-                            "step": "editing",
-                            "tool": tool_call.function.name,
-                            "result": str(result),
-                        },
-                    )
-                    context.tool_results[tool_call.id] = result
-                    if not str(result).startswith("Tool '") and not str(
-                        result
-                    ).startswith("Unknown tool"):
-                        iteration_had_progress = True
-                    context.messages.append(
-                        {
-                            "role": "tool",
-                            "content": str(result),
-                            "tool_call_id": tool_call.id,
-                        }
-                    )
-                except Exception as e:
-                    error_message = (
-                        f"Error executing tool '{tool_call.function.name}': {str(e)}"
-                    )
-                    await self._emit(
-                        on_event,
-                        {
-                            "type": "error",
-                            "step": "editing",
-                            "message": error_message,
-                        },
-                    )
-                    self.agent_state_manager.update_state("error")
-                    context.messages.append(
-                        {
-                            "role": "tool",
-                            "content": error_message,
-                            "tool_call_id": tool_call.id,
-                        }
-                    )
-
-            if iteration_had_progress:
-                stagnant_iterations = 0
-            else:
-                stagnant_iterations += 1
-
-            if stagnant_iterations >= 5:
-                await self._emit(
-                    on_event,
-                    {
-                        "type": "status",
-                        "step": "editing",
-                        "message": "No progress made in the last 5 iterations.",
-                    },
-                )
-                context.messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "You are looping. Execute concrete file edits immediately and then call finish. "
-                            "Do not repeat exploration."
-                        ),
-                    }
-                )
-
-            if tool_names and set(tool_names).issubset(
-                {"list_files", "get_directory_tree"}
-            ):
-                consecutive_structure_only_iterations += 1
-            else:
-                consecutive_structure_only_iterations = 0
-
-            if consecutive_structure_only_iterations >= 3:
-                await self._emit(
-                    on_event,
-                    {
-                        "type": "status",
-                        "step": "editing",
-                        "message": "Repeated structure inspection detected.",
-                    },
-                )
-                context.messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Stop repeating structure inspection. "
-                            "Use the provided plan and perform concrete file edits now. "
-                            "Then call finish."
-                        ),
-                    }
-                )
-
-            if consecutive_structure_only_iterations >= 6:
-                self.agent_state_manager.update_state("error")
-                raise RuntimeError(
-                    "Editing is stuck in repeated list_files/get_directory_tree calls. "
-                    "Aborting to avoid an infinite loop."
-                )
-
-        self.agent_state_manager.update_state("error")
-        raise RuntimeError(
-            "Editing phase reached max iterations without calling finish. "
-            "Model likely did not emit the required completion tool call."
+        return await self._run_agent_loop(
+            context=context,
+            tools=self.editing_tools,
+            tool_registrations=self.tool_registrations,
+            step="editing",
+            finish_tool="finish",
+            on_event=on_event,
+            on_finish=_on_finish,
+            stagnant_limit=5,
         )
 
     async def generate_code_stream(

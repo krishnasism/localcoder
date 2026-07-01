@@ -144,8 +144,10 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
         "function": {
             "name": "sed",
             "description": (
-                "Replace occurrences of a string in a file. "
-                "If a line number is provided, only that line will be modified."
+                "Replace exactly one occurrence of old_string in a file. "
+                "old_string must match the file content exactly (including whitespace). "
+                "If old_string appears more than once, pass `line` (1-based) to target one line. "
+                "Returns EDIT_FAILED when the match is missing or ambiguous."
             ),
             "parameters": {
                 "type": "object",

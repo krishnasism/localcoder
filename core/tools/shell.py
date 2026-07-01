@@ -1,9 +1,24 @@
 import asyncio
 import os
+import pathlib
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Shell:
     current_directory = os.getcwd()
+
+    @staticmethod
+    async def get_parent_folder(path: str) -> str:
+        try:
+
+            def _get_parent() -> str:
+                return str(pathlib.Path(path).parent)
+
+            return await asyncio.to_thread(_get_parent)
+        except Exception as e:
+            return f"Error getting parent folder: {str(e)}"
 
     @staticmethod
     async def find_files(pattern: str) -> str:
@@ -145,6 +160,11 @@ class Shell:
                 os.chdir(path)
                 return os.getcwd()
 
+            if pathlib.Path(path).is_file():
+                logger.warning(
+                    f"Provided path '{path}' is a file. Changing to its parent directory."
+                )
+                path = await Shell.get_parent_folder(path)
             Shell.current_directory = await asyncio.to_thread(_chdir)
             return f"Changed directory to {Shell.current_directory}"
         except Exception as e:
@@ -164,6 +184,7 @@ class Shell:
                         ]
                     files = [f for f in files if f not in ignored_files]
                 files = [f for f in files if not f.startswith(".git")]
+                files = [f for f in files if "node_modules" not in f]
                 return "\n".join(files)
 
             return await asyncio.to_thread(_list)
@@ -212,24 +233,51 @@ class Shell:
     ) -> str:
         try:
 
-            def _sed() -> None:
+            def _sed() -> str:
                 file_path = os.path.join(Shell.current_directory, filename)
                 with open(file_path, "r") as file:
                     content = file.read()
-                if line is not None:
-                    lines = content.split("\n")
-                    if 0 <= line - 1 < len(lines):
-                        lines[line - 1] = lines[line - 1].replace(
-                            old_string, new_string
-                        )
-                    content = "\n".join(lines)
-                else:
-                    content = content.replace(old_string, new_string)
-                with open(file_path, "w") as file:
-                    file.write(content)
 
-            await asyncio.to_thread(_sed)
-            return f"Replaced '{old_string}' with '{new_string}' in {filename}"
+                if line is not None:
+                    lines = content.splitlines(keepends=True)
+                    if not (0 <= line - 1 < len(lines)):
+                        return (
+                            f"EDIT_FAILED: line {line} is out of range in {filename} "
+                            f"(file has {len(lines)} lines). Read the file first."
+                        )
+                    line_text = lines[line - 1]
+                    if old_string not in line_text:
+                        return (
+                            f"EDIT_FAILED: old_string not found on line {line} of {filename}. "
+                            f"Read the file and copy the exact text from that line."
+                        )
+                    lines[line - 1] = line_text.replace(old_string, new_string, 1)
+                    updated = "".join(lines)
+                    replacements = 1
+                else:
+                    occurrences = content.count(old_string)
+                    if occurrences == 0:
+                        return (
+                            f"EDIT_FAILED: old_string not found in {filename}. "
+                            "Read the file and copy the exact text to replace."
+                        )
+                    if occurrences > 1:
+                        return (
+                            f"EDIT_FAILED: old_string appears {occurrences} times in {filename}. "
+                            "Use the `line` parameter or include more surrounding context "
+                            "so old_string matches exactly once."
+                        )
+                    updated = content.replace(old_string, new_string, 1)
+                    replacements = 1
+
+                with open(file_path, "w") as file:
+                    file.write(updated)
+                return (
+                    f"SUCCESS: replaced {replacements} occurrence(s) in {filename}. "
+                    "Re-read the file to verify if needed."
+                )
+
+            return await asyncio.to_thread(_sed)
         except Exception as e:
             return f"Error performing sed operation: {str(e)}"
 

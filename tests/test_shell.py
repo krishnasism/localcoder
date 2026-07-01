@@ -305,7 +305,7 @@ class TestShellNonFileOperations:
         try:
             asyncio.run(Shell.write_file("multi.txt", "first\nsecond\nthird\n"))
             result = asyncio.run(Shell.sed("multi.txt", "second", "SECOND", line=2))
-            assert "Replaced" in result
+            assert "SUCCESS" in result
             content = asyncio.run(Shell.read_file("multi.txt"))
             lines = content.split("\n")
             assert lines[1] == "SECOND"
@@ -315,15 +315,38 @@ class TestShellNonFileOperations:
             self._restore(original_dir)
 
     def test_sed_without_line(self):
-        """sed without line should replace ALL occurrences."""
+        """sed without line should replace a single unique occurrence."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.write_file("all.txt", "aa\nbb\ncc\n"))
+            result = asyncio.run(Shell.sed("all.txt", "bb", "ZZ"))
+            assert "SUCCESS" in result
+            content = asyncio.run(Shell.read_file("all.txt"))
+            assert "bb" not in content
+            assert "ZZ" in content
+            assert content.count("ZZ") == 1
+        finally:
+            self._restore(original_dir)
+
+    def test_sed_rejects_ambiguous_match(self):
+        """sed without line should fail when old_string appears multiple times."""
         td, original_dir = self._chdir_to_temp()
         try:
             asyncio.run(Shell.write_file("all.txt", "aa\nbb\naa\n"))
             result = asyncio.run(Shell.sed("all.txt", "aa", "ZZ"))
-            assert "Replaced" in result
+            assert result.startswith("EDIT_FAILED:")
             content = asyncio.run(Shell.read_file("all.txt"))
-            assert "aa" not in content
-            assert "ZZ" in content
+            assert content == "aa\nbb\naa\n"
+        finally:
+            self._restore(original_dir)
+
+    def test_sed_rejects_missing_match(self):
+        """sed should fail clearly when old_string is not in the file."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.write_file("all.txt", "hello\n"))
+            result = asyncio.run(Shell.sed("all.txt", "missing", "ZZ"))
+            assert result.startswith("EDIT_FAILED:")
         finally:
             self._restore(original_dir)
 
