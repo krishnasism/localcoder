@@ -6,10 +6,16 @@ from core.agent.prompts import PLANNING_SYSTEM_PROMPT, SYSTEM_PROMPT
 from core.agent.toolsets import build_tool_registry
 from core.agent.utils import (
     EDIT_TOOLS,
+    PLANNING_CLARIFICATION_NUDGE,
+    PLANNING_NO_PLAN_NUDGE,
+    PLANNING_REJECTION_MESSAGE,
     assistant_message_to_dict,
     build_execution_reminder,
+    is_actionable_plan,
     is_edit_failure,
     is_tool_error,
+    looks_like_clarification_request,
+    looks_like_plan,
     resolve_target_directory,
     truncate_for_context,
 )
@@ -88,13 +94,19 @@ class CodeAgent:
     def __get_plan_finish_definition(self):
         return {
             "name": "plan_finish",
-            "description": "Indicates that the agent has completed the planning phase and is ready to edit code.",
+            "description": (
+                "Complete the planning phase. Pass a numbered, actionable plan in `summary` "
+                "(concrete files and changes). Never pass clarifying questions."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "summary": {
                         "type": "string",
-                        "description": "A summary of the planning completion.",
+                        "description": (
+                            "Numbered step-by-step plan with concrete file-level changes. "
+                            "Required — do not leave empty."
+                        ),
                     },
                     "artifacts": {
                         "type": "array",
@@ -150,20 +162,18 @@ class CodeAgent:
         return {tool["function"]["name"] for tool in tools}
 
     @staticmethod
-    def _looks_like_plan(text: str) -> bool:
-        if not text:
-            return False
-        lowered = text.lower()
-        has_steps = "1." in text or "- " in text or "step" in lowered
-        has_intent = any(
-            keyword in lowered
-            for keyword in ["plan", "test", "coverage", "refactor", "create", "update"]
-        )
-        return has_steps and has_intent
+    def _extract_finish_summary(tool_call, message) -> str:
+        args = CodeAgent._safe_load_tool_args(tool_call.function.arguments)
+        return (args.get("summary") or message.content or "").strip()
 
     @staticmethod
     def _fallback_plan(prompt: str) -> str:
-        return f"Task focus: {prompt}"
+        return (
+            f"1. Inspect files relevant to: {prompt}\n"
+            f"2. Apply the minimal code changes needed for: {prompt}\n"
+            f"3. Verify with read_file or tests\n"
+            f"4. Call finish"
+        )
 
     def _track_tool_usage(
         self, context: AgentContext, tool_name: str, args: dict, result: str
@@ -252,7 +262,7 @@ class CodeAgent:
         initial_tree: str,
     ) -> str:
         return (
-            f"{prompt}\n"
+            f"User task (complete — do not ask for clarification):\n{prompt}\n\n"
             f"Target file or folder: {path}\n"
             f"Directory setup: {change_dir_result}\n"
             f"Current working directory: {Shell.current_directory}\n\n"
@@ -319,8 +329,24 @@ class CodeAgent:
             for tool_call in message.tool_calls or []:
                 tool_names.append(tool_call.function.name)
                 if tool_call.function.name == finish_tool:
+                    summary = self._extract_finish_summary(tool_call, message)
+                    if step == "planning" and not is_actionable_plan(summary):
+                        context.messages.append(
+                            {
+                                "role": "tool",
+                                "content": PLANNING_REJECTION_MESSAGE,
+                                "tool_call_id": tool_call.id,
+                            }
+                        )
+                        stagnant_iterations += 1
+                        if looks_like_clarification_request(summary):
+                            context.messages.append(
+                                {"role": "user", "content": PLANNING_CLARIFICATION_NUDGE}
+                            )
+                        continue
+
                     logger.info(f"{finish_tool} called successfully.")
-                    summary = message.content or f"{step.title()} completed."
+                    summary = summary or f"{step.title()} completed."
                     if on_finish is not None:
                         resolved = await on_finish(summary)
                         if resolved is not None:
@@ -403,10 +429,20 @@ class CodeAgent:
                 step == "planning"
                 and message.content
                 and not (message.tool_calls or [])
-                and self._looks_like_plan(message.content)
             ):
-                await self.plan_finish(summary=message.content)
-                return message.content
+                if looks_like_clarification_request(message.content):
+                    context.messages.append(
+                        {"role": "user", "content": PLANNING_CLARIFICATION_NUDGE}
+                    )
+                    stagnant_iterations += 2
+                elif not is_actionable_plan(message.content):
+                    context.messages.append(
+                        {"role": "user", "content": PLANNING_NO_PLAN_NUDGE}
+                    )
+                    stagnant_iterations += 1
+                elif looks_like_plan(message.content):
+                    await self.plan_finish(summary=message.content)
+                    return message.content
 
             if iteration_had_progress:
                 stagnant_iterations = 0
@@ -560,6 +596,7 @@ class CodeAgent:
             finish_tool="plan_finish",
             on_event=on_event,
             on_finish=_plan_finish,
+            stagnant_limit=3,
         )
 
     async def generate_code(

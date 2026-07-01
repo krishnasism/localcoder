@@ -76,6 +76,92 @@ def parse_plan_steps(plan: str) -> list[str]:
     return steps
 
 
+def looks_like_clarification_request(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    markers = (
+        "could you clarify",
+        "can you clarify",
+        "please clarify",
+        "what would you like",
+        "what feature",
+        "what task",
+        "what should i",
+        "need more information",
+        "could you provide",
+        "unclear what",
+        "do you want me to",
+        "which feature",
+    )
+    if any(marker in lowered for marker in markers):
+        return True
+    return text.count("?") >= 2
+
+
+def looks_like_plan(text: str) -> bool:
+    steps = parse_plan_steps(text)
+    if len(steps) >= 2:
+        return True
+    if not steps:
+        return False
+    lowered = text.lower()
+    action_verbs = (
+        "edit",
+        "update",
+        "create",
+        "add",
+        "fix",
+        "modify",
+        "write",
+        "implement",
+        "change",
+        "remove",
+        "delete",
+        "run ",
+    )
+    return any(verb in lowered for verb in action_verbs)
+
+
+def is_actionable_plan(text: str) -> bool:
+    if not text or looks_like_clarification_request(text):
+        return False
+    if looks_like_plan(text):
+        return True
+    lowered = text.lower()
+    action_verbs = (
+        "edit",
+        "update",
+        "create",
+        "add",
+        "fix",
+        "modify",
+        "write",
+        "implement",
+    )
+    has_action = any(verb in lowered for verb in action_verbs)
+    has_structure = bool(parse_plan_steps(text))
+    return has_action and has_structure
+
+
+PLANNING_REJECTION_MESSAGE = (
+    "plan_finish rejected: `summary` must be a numbered, actionable plan with concrete "
+    "file-level steps — not clarifying questions. The user's task is already in the first "
+    "message. Read relevant files if needed, then call plan_finish again."
+)
+
+PLANNING_CLARIFICATION_NUDGE = (
+    "Do not ask clarifying questions. The user's task is already in the first message. "
+    "Make reasonable assumptions, write a numbered plan of concrete file changes, and "
+    "call plan_finish with that plan in the `summary` parameter."
+)
+
+PLANNING_NO_PLAN_NUDGE = (
+    "Respond with a numbered plan of concrete file changes, then call plan_finish with "
+    "that plan in the `summary` parameter. Do not reply with analysis only."
+)
+
+
 def build_execution_reminder(context) -> str:
     modified = ", ".join(sorted(context.files_modified)) or "none yet"
     read_files = ", ".join(sorted(context.files_read)) or "none yet"
