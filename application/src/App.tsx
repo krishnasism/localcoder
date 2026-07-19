@@ -56,7 +56,7 @@ const AVAILABLE_MODELS = [
 const DEFAULT_PATH =
   typeof window !== "undefined"
     ? window.localStorage.getItem("localcoder.path") ??
-      "C:/Users/Krish/project/localcoder"
+    "C:/Users/Krish/project/localcoder"
     : "C:/Users/Krish/project/localcoder";
 
 function createId() {
@@ -266,6 +266,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const themeIcon = theme === "dark" ? "☀️" : "🌙";
   const toggleTheme = () =>
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   const feedRef = useRef<HTMLDivElement | null>(null);
@@ -616,6 +617,9 @@ export default function App() {
                 files in your workspace, and streams progress as it works.
               </p>
               <div className="suggestion-row">
+                <button onClick={toggleTheme} aria-label="Toggle theme" style={{ marginLeft: 8 }}>
+                  {themeIcon}
+                </button>
                 {[
                   "Add input validation to the generate_code API",
                   "Refactor the agent loop to fail faster on repeated tools",
