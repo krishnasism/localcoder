@@ -25,9 +25,7 @@ def test_explain_code_endpoint(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api, "explain_code", _fake_explain)
 
-    response = client.post(
-        "/explain_code", json={"query": "what", "path": str(target)}
-    )
+    response = client.post("/explain_code", json={"query": "what", "path": str(target)})
 
     assert response.status_code == 200
     assert response.json() == {"explanation": "explanation"}

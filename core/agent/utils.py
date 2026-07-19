@@ -193,9 +193,7 @@ REPEATED_TOOL_NUDGE = (
     "in context, make a concrete file edit with sed/write_file, or call finish."
 )
 
-EMBEDDED_TOOL_NUDGE = (
-    "Do not print tool JSON in chat text. Invoke tools through the tool-calling API only."
-)
+EMBEDDED_TOOL_NUDGE = "Do not print tool JSON in chat text. Invoke tools through the tool-calling API only."
 
 DISCOVERY_LOOP_NUDGE = (
     "Stop running discovery commands (shell, pytest collect, list_files, repeated reads). "
@@ -318,9 +316,7 @@ def compact_messages(messages: list, keep_recent_tool_results: int = 6) -> list:
         return messages
 
     tool_indices = [
-        index
-        for index, message in enumerate(messages)
-        if message.get("role") == "tool"
+        index for index, message in enumerate(messages) if message.get("role") == "tool"
     ]
     if len(tool_indices) <= keep_recent_tool_results:
         compacted = []

@@ -126,7 +126,9 @@ class Shell:
             await asyncio.to_thread(os.makedirs, dest_dir_path, exist_ok=True)
             dest_path = os.path.join(dest_dir_path, os.path.basename(src_path))
             await asyncio.to_thread(os.rename, src_path, dest_path)
-            return f"File '{src_path}' moved to directory '{dest_dir_path}' successfully."
+            return (
+                f"File '{src_path}' moved to directory '{dest_dir_path}' successfully."
+            )
         except Exception as e:
             return f"Error moving file to directory: {str(e)}"
 

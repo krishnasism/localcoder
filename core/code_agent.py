@@ -192,9 +192,7 @@ class CodeAgent:
         args = CodeAgent._safe_load_tool_args(tool_call.function.arguments)
         return (args.get("summary") or message.content or "").strip()
 
-    async def _emit_plan(
-        self, on_event: EventCallback | None, plan: str
-    ) -> None:
+    async def _emit_plan(self, on_event: EventCallback | None, plan: str) -> None:
         await self._emit(
             on_event,
             {
@@ -261,14 +259,18 @@ class CodeAgent:
 
         if tool_name == "read_file":
             filename = args.get("filename")
-            if filename and context.file_read_counts.get(filename, 0) >= MAX_SAME_FILE_READS:
+            if (
+                filename
+                and context.file_read_counts.get(filename, 0) >= MAX_SAME_FILE_READS
+            ):
                 return (
                     f"Blocked: `{filename}` has already been read "
                     f"{context.file_read_counts[filename]} times. {READ_LIMIT_NUDGE}"
                 )
 
         if tool_name in STRUCTURE_TOOLS and any(
-            sig.startswith(f"{tool_name}:") for sig in context.recent_tool_signatures[:-1]
+            sig.startswith(f"{tool_name}:")
+            for sig in context.recent_tool_signatures[:-1]
         ):
             # Soft block only after we already recorded a prior structure call.
             prior = sum(
@@ -863,7 +865,9 @@ class CodeAgent:
         context.discovery_iterations = 0
         context.recent_tool_signatures = []
         reset_nudge_tracking(context)
-        context.messages = compact_messages(context.messages, keep_recent_tool_results=8)
+        context.messages = compact_messages(
+            context.messages, keep_recent_tool_results=8
+        )
         context.messages.append(
             {
                 "role": "user",

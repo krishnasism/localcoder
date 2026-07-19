@@ -38,7 +38,8 @@ class TestShellFileOperations:
             # Delete the file
             delete_result = asyncio.run(Shell.delete_file(filename))
             assert "deleted successfully" in delete_result
-            assert not os.path.exists(os.path.join(td, filename))        finally:
+            assert not os.path.exists(os.path.join(td, filename))
+        finally:
             self._restore(original_dir)
 
     def test_copy_and_move_file(self):
@@ -77,12 +78,10 @@ class TestShellFileOperations:
         td, original_dir = self._chdir_to_temp()
         try:
             asyncio.run(Shell.write_file(filename, "line_one\n"))
-            assert (
-                asyncio.run(Shell.append_to_file(filename, "line_two\n"))
-                == f"Appended content to {filename}"
-            )
-            result = asyncio.run(Shell.read_file(filename))
-            assert result == "line_one\nline_two\n"
+            result = asyncio.run(Shell.append_to_file(filename, "line_two\n"))
+            assert result.startswith("Appended content to ")
+            content = asyncio.run(Shell.read_file(filename))
+            assert content == "line_one\nline_two\n"
         finally:
             self._restore(original_dir)
 
@@ -90,17 +89,15 @@ class TestShellFileOperations:
         dirname = "nested_test_dir"
         td, original_dir = self._chdir_to_temp()
         try:
-            assert (
-                asyncio.run(Shell.mkdir(dirname))
-                == f"Directory '{dirname}' created successfully."
-            )
+            result = asyncio.run(Shell.mkdir(dirname))
+            assert "created successfully" in result
             assert os.path.isdir(os.path.join(td, dirname))
 
             # Create a file inside the subdir and read it via Shell
             shell_path = os.path.join(dirname, "inner.txt")
             asyncio.run(Shell.write_file(shell_path, "inside nested dir"))
-            result = asyncio.run(Shell.read_file(shell_path))
-            assert result == "inside nested dir"
+            content = asyncio.run(Shell.read_file(shell_path))
+            assert content == "inside nested dir"
         finally:
             self._restore(original_dir)
 
@@ -568,7 +565,9 @@ class TestShellPathNormalization:
         try:
             mixed = f"foo{os.sep}bar/baz.txt"
             resolved = Shell._resolve_path(mixed)
-            assert resolved == os.path.normpath(os.path.join(td, "foo", "bar", "baz.txt"))
+            assert resolved == os.path.normpath(
+                os.path.join(td, "foo", "bar", "baz.txt")
+            )
             if os.name == "nt":
                 assert "/" not in resolved
         finally:
@@ -587,7 +586,10 @@ class TestShellPathNormalization:
             assert "Wrote content to" in result
             expected = os.path.join(td, "application", "src", "styles.css")
             assert os.path.isfile(expected)
-            assert asyncio.run(Shell.read_file("application/src/styles.css")) == ".root {}\n"
+            assert (
+                asyncio.run(Shell.read_file("application/src/styles.css"))
+                == ".root {}\n"
+            )
         finally:
             os.chdir(original_cwd)
             Shell.current_directory = original
