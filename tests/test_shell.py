@@ -27,10 +27,8 @@ class TestShellFileOperations:
         td, original_dir = self._chdir_to_temp()
         try:
             # Write a file
-            assert (
-                asyncio.run(Shell.write_file(filename, content))
-                == f"Wrote content to {filename}"
-            )
+            write_result = asyncio.run(Shell.write_file(filename, content))
+            assert write_result.startswith("Wrote content to ")
             assert os.path.isfile(os.path.join(td, filename))
 
             # Read it back via read_file to verify content
@@ -38,12 +36,9 @@ class TestShellFileOperations:
             assert result == content
 
             # Delete the file
-            assert (
-                asyncio.run(Shell.delete_file(filename))
-                == f"File '{filename}' deleted successfully."
-            )
-            assert not os.path.exists(os.path.join(td, filename))
-        finally:
+            delete_result = asyncio.run(Shell.delete_file(filename))
+            assert "deleted successfully" in delete_result
+            assert not os.path.exists(os.path.join(td, filename))        finally:
             self._restore(original_dir)
 
     def test_copy_and_move_file(self):
@@ -58,10 +53,8 @@ class TestShellFileOperations:
             assert os.path.isfile(os.path.join(td, src_name))
 
             # Copy
-            assert (
-                asyncio.run(Shell.copy_file(src_name, dest_name))
-                == f"File '{src_name}' copied to '{dest_name}' successfully."
-            )
+            copy_result = asyncio.run(Shell.copy_file(src_name, dest_name))
+            assert "copied to" in copy_result
             assert os.path.isfile(
                 os.path.join(td, src_name)
             )  # source should still exist
@@ -69,10 +62,8 @@ class TestShellFileOperations:
 
             # Move (rename) the copy
             moved_name = "moved_unit.txt"
-            assert (
-                asyncio.run(Shell.move_file(dest_name, moved_name))
-                == f"File '{dest_name}' moved to '{moved_name}' successfully."
-            )
+            move_result = asyncio.run(Shell.move_file(dest_name, moved_name))
+            assert "moved to" in move_result
             assert not os.path.exists(os.path.join(td, dest_name))  # original copy gone
             assert os.path.isfile(os.path.join(td, moved_name))
 
@@ -498,10 +489,7 @@ class TestShellNonFileOperations:
 
             # Move it to a new directory (dir should be auto-created)
             result = asyncio.run(Shell.move_file_to_directory(filename, dest_dir))
-            assert (
-                f"File '{filename}' moved to directory '{dest_dir}' successfully."
-                == result
-            )
+            assert "moved to directory" in result
             assert not os.path.exists(os.path.join(td, filename))  # original gone
             assert os.path.isdir(os.path.join(td, dest_dir))
             assert os.path.isfile(os.path.join(td, dest_dir, filename))
@@ -548,3 +536,58 @@ class TestShellNonFileOperations:
             assert result.strip().strip("\n") == "second line"
         finally:
             self._restore(original_dir)
+
+
+class TestShellPathNormalization:
+    def test_resolve_path_normalizes_forward_slashes(self):
+        td = tempfile.mkdtemp()
+        original = Shell.current_directory
+        Shell.current_directory = td
+        try:
+            nested = os.path.join(td, "application", "src")
+            os.makedirs(nested)
+            target = os.path.join(nested, "styles.css")
+            with open(target, "w", encoding="utf-8") as handle:
+                handle.write("body {}\n")
+
+            resolved = Shell._resolve_path("application/src/styles.css")
+            assert resolved == os.path.normpath(target)
+            assert os.sep in resolved or len(os.path.splitdrive(resolved)[0]) > 0
+            if os.name == "nt":
+                assert "/" not in resolved
+
+            content = asyncio.run(Shell.read_file("application/src/styles.css"))
+            assert content == "body {}\n"
+        finally:
+            Shell.current_directory = original
+
+    def test_resolve_path_accepts_mixed_separators(self):
+        td = tempfile.mkdtemp()
+        original = Shell.current_directory
+        Shell.current_directory = td
+        try:
+            mixed = f"foo{os.sep}bar/baz.txt"
+            resolved = Shell._resolve_path(mixed)
+            assert resolved == os.path.normpath(os.path.join(td, "foo", "bar", "baz.txt"))
+            if os.name == "nt":
+                assert "/" not in resolved
+        finally:
+            Shell.current_directory = original
+
+    def test_write_file_with_forward_slash_nested_path(self):
+        td = tempfile.mkdtemp()
+        original_cwd = os.getcwd()
+        original = Shell.current_directory
+        os.chdir(td)
+        Shell.current_directory = td
+        try:
+            result = asyncio.run(
+                Shell.write_file("application/src/styles.css", ".root {}\n")
+            )
+            assert "Wrote content to" in result
+            expected = os.path.join(td, "application", "src", "styles.css")
+            assert os.path.isfile(expected)
+            assert asyncio.run(Shell.read_file("application/src/styles.css")) == ".root {}\n"
+        finally:
+            os.chdir(original_cwd)
+            Shell.current_directory = original

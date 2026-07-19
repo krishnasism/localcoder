@@ -1,6 +1,21 @@
 import os
+import platform
 
-current_os = os.name
+_system = platform.system()
+if _system == "Windows":
+    _os_label = "Windows"
+    _path_hint = (
+        "Prefer backslash paths (e.g. application\\src\\App.tsx). "
+        "Forward slashes are also accepted and will be normalized."
+    )
+elif _system == "Darwin":
+    _os_label = "macOS"
+    _path_hint = "Use forward-slash paths (e.g. application/src/App.tsx)."
+else:
+    _os_label = _system or "Linux"
+    _path_hint = "Use forward-slash paths (e.g. application/src/App.tsx)."
+
+_OS_BLOCK = f"Operating System: {_os_label} (os.name={os.name}). {_path_hint}"
 
 PLANNING_SYSTEM_PROMPT = f"""
 You are an autonomous software engineer in the planning phase only.
@@ -18,7 +33,7 @@ Rules:
 - Plan minimal, concrete edits (specific files and changes).
 - When the plan is ready, call `plan_finish` with a numbered step-by-step plan in the
   `summary` argument. Do not put the plan only in chat text.
-- Operating System: {current_os}
+- {_OS_BLOCK}
 
 Recommended workflow:
 
@@ -48,7 +63,7 @@ Rules:
 - After each successful edit, move to the next plan step. Do not loop on reads or shell commands.
 - Verify changes with `read_file` or tests only when the plan says to.
 - Call `finish` as soon as every planned change is complete. Prefer finishing over extra exploration.
-- Current Operating System: {current_os}
+- {_OS_BLOCK}
 
 Recommended workflow:
 

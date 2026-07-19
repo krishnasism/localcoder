@@ -11,11 +11,31 @@ class Shell:
     current_directory = os.getcwd()
 
     @staticmethod
+    def _normalize_user_path(path: str) -> str:
+        """Convert mixed / and \\ separators to the current OS convention."""
+        if not path:
+            return path
+        # pathlib accepts both separators; normpath makes them OS-native.
+        return os.path.normpath(path.replace("/", os.sep).replace("\\", os.sep))
+
+    @staticmethod
+    def _resolve_path(path: str) -> str:
+        """Resolve a tool path against the agent cwd with OS-native separators."""
+        if not path or not str(path).strip():
+            return Shell.current_directory
+
+        normalized = Shell._normalize_user_path(str(path).strip())
+        if os.path.isabs(normalized):
+            return normalized
+
+        return os.path.normpath(os.path.join(Shell.current_directory, normalized))
+
+    @staticmethod
     async def get_parent_folder(path: str) -> str:
         try:
 
             def _get_parent() -> str:
-                return str(pathlib.Path(path).parent)
+                return str(pathlib.Path(Shell._resolve_path(path)).parent)
 
             return await asyncio.to_thread(_get_parent)
         except Exception as e:
@@ -61,32 +81,28 @@ class Shell:
     @staticmethod
     async def mkdir(path: str) -> str:
         try:
-            await asyncio.to_thread(
-                os.makedirs, os.path.join(Shell.current_directory, path), exist_ok=True
-            )
-            return f"Directory '{path}' created successfully."
+            resolved = Shell._resolve_path(path)
+            await asyncio.to_thread(os.makedirs, resolved, exist_ok=True)
+            return f"Directory '{resolved}' created successfully."
         except Exception as e:
             return f"Error creating directory: {str(e)}"
 
     @staticmethod
     async def delete_file(filename: str) -> str:
         try:
-            await asyncio.to_thread(
-                os.remove, os.path.join(Shell.current_directory, filename)
-            )
-            return f"File '{filename}' deleted successfully."
+            resolved = Shell._resolve_path(filename)
+            await asyncio.to_thread(os.remove, resolved)
+            return f"File '{resolved}' deleted successfully."
         except Exception as e:
             return f"Error deleting file: {str(e)}"
 
     @staticmethod
     async def move_file(src: str, dest: str) -> str:
         try:
-            await asyncio.to_thread(
-                os.rename,
-                os.path.join(Shell.current_directory, src),
-                os.path.join(Shell.current_directory, dest),
-            )
-            return f"File '{src}' moved to '{dest}' successfully."
+            src_path = Shell._resolve_path(src)
+            dest_path = Shell._resolve_path(dest)
+            await asyncio.to_thread(os.rename, src_path, dest_path)
+            return f"File '{src_path}' moved to '{dest_path}' successfully."
         except Exception as e:
             return f"Error moving file: {str(e)}"
 
@@ -95,42 +111,36 @@ class Shell:
         try:
             import shutil
 
-            await asyncio.to_thread(
-                shutil.copy,
-                os.path.join(Shell.current_directory, src),
-                os.path.join(Shell.current_directory, dest),
-            )
-            return f"File '{src}' copied to '{dest}' successfully."
+            src_path = Shell._resolve_path(src)
+            dest_path = Shell._resolve_path(dest)
+            await asyncio.to_thread(shutil.copy, src_path, dest_path)
+            return f"File '{src_path}' copied to '{dest_path}' successfully."
         except Exception as e:
             return f"Error copying file: {str(e)}"
 
     @staticmethod
     async def move_file_to_directory(src: str, dest_dir: str) -> str:
         try:
-            await asyncio.to_thread(
-                os.makedirs,
-                os.path.join(Shell.current_directory, dest_dir),
-                exist_ok=True,
-            )
-            await asyncio.to_thread(
-                os.rename,
-                os.path.join(Shell.current_directory, src),
-                os.path.join(Shell.current_directory, dest_dir, src),
-            )
-            return f"File '{src}' moved to directory '{dest_dir}' successfully."
+            src_path = Shell._resolve_path(src)
+            dest_dir_path = Shell._resolve_path(dest_dir)
+            await asyncio.to_thread(os.makedirs, dest_dir_path, exist_ok=True)
+            dest_path = os.path.join(dest_dir_path, os.path.basename(src_path))
+            await asyncio.to_thread(os.rename, src_path, dest_path)
+            return f"File '{src_path}' moved to directory '{dest_dir_path}' successfully."
         except Exception as e:
             return f"Error moving file to directory: {str(e)}"
 
     @staticmethod
     async def append_to_file(filename: str, content: str) -> str:
         try:
+            resolved = Shell._resolve_path(filename)
 
             def _append() -> None:
-                with open(os.path.join(Shell.current_directory, filename), "a") as file:
+                with open(resolved, "a") as file:
                     file.write(content)
 
             await asyncio.to_thread(_append)
-            return f"Appended content to {filename}"
+            return f"Appended content to {resolved}"
         except Exception as e:
             return f"Error appending to file: {str(e)}"
 
@@ -209,16 +219,25 @@ class Shell:
     @staticmethod
     async def change_directory(path: str) -> str:
         try:
+            resolved = Shell._resolve_path(path)
 
             def _chdir() -> str:
-                os.chdir(path)
+                os.chdir(resolved)
                 return os.getcwd()
 
-            if pathlib.Path(path).is_file():
+            if pathlib.Path(resolved).is_file():
                 logger.warning(
-                    f"Provided path '{path}' is a file. Changing to its parent directory."
+                    f"Provided path '{resolved}' is a file. Changing to its parent directory."
                 )
-                path = await Shell.get_parent_folder(path)
+                resolved = str(pathlib.Path(resolved).parent)
+
+                def _chdir_parent() -> str:
+                    os.chdir(resolved)
+                    return os.getcwd()
+
+                Shell.current_directory = await asyncio.to_thread(_chdir_parent)
+                return f"Changed directory to {Shell.current_directory}"
+
             Shell.current_directory = await asyncio.to_thread(_chdir)
             return f"Changed directory to {Shell.current_directory}"
         except Exception as e:
@@ -228,9 +247,7 @@ class Shell:
     def _resolve_directory(path: str | None = None) -> str:
         if not path:
             return Shell.current_directory
-        if os.path.isabs(path):
-            return path
-        return os.path.join(Shell.current_directory, path)
+        return Shell._resolve_path(path)
 
     @staticmethod
     async def list_files(path: str | None = None) -> str:
@@ -284,9 +301,10 @@ class Shell:
     @staticmethod
     async def read_file(filename: str, line: int = None) -> str:
         try:
+            file_path = Shell._resolve_path(filename)
 
             def _read() -> str:
-                with open(os.path.join(Shell.current_directory, filename), "r") as file:
+                with open(file_path, "r") as file:
                     if line is not None:
                         lines = file.readlines()
                         if 0 <= line - 1 < len(lines):
@@ -303,9 +321,9 @@ class Shell:
         filename: str, old_string: str, new_string: str, line: int = None
     ) -> str:
         try:
+            file_path = Shell._resolve_path(filename)
 
             def _sed() -> str:
-                file_path = os.path.join(Shell.current_directory, filename)
                 with open(file_path, "r") as file:
                     content = file.read()
 
@@ -313,13 +331,13 @@ class Shell:
                     lines = content.splitlines(keepends=True)
                     if not (0 <= line - 1 < len(lines)):
                         return (
-                            f"EDIT_FAILED: line {line} is out of range in {filename} "
+                            f"EDIT_FAILED: line {line} is out of range in {file_path} "
                             f"(file has {len(lines)} lines). Read the file first."
                         )
                     line_text = lines[line - 1]
                     if old_string not in line_text:
                         return (
-                            f"EDIT_FAILED: old_string not found on line {line} of {filename}. "
+                            f"EDIT_FAILED: old_string not found on line {line} of {file_path}. "
                             f"Read the file and copy the exact text from that line."
                         )
                     lines[line - 1] = line_text.replace(old_string, new_string, 1)
@@ -329,12 +347,12 @@ class Shell:
                     occurrences = content.count(old_string)
                     if occurrences == 0:
                         return (
-                            f"EDIT_FAILED: old_string not found in {filename}. "
+                            f"EDIT_FAILED: old_string not found in {file_path}. "
                             "Read the file and copy the exact text to replace."
                         )
                     if occurrences > 1:
                         return (
-                            f"EDIT_FAILED: old_string appears {occurrences} times in {filename}. "
+                            f"EDIT_FAILED: old_string appears {occurrences} times in {file_path}. "
                             "Use the `line` parameter or include more surrounding context "
                             "so old_string matches exactly once."
                         )
@@ -344,7 +362,7 @@ class Shell:
                 with open(file_path, "w") as file:
                     file.write(updated)
                 return (
-                    f"SUCCESS: replaced {replacements} occurrence(s) in {filename}. "
+                    f"SUCCESS: replaced {replacements} occurrence(s) in {file_path}. "
                     "Re-read the file to verify if needed."
                 )
 
@@ -355,12 +373,16 @@ class Shell:
     @staticmethod
     async def write_file(filename: str, content: str) -> str:
         try:
+            file_path = Shell._resolve_path(filename)
 
             def _write() -> None:
-                with open(os.path.join(Shell.current_directory, filename), "w") as file:
+                parent = os.path.dirname(file_path)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                with open(file_path, "w") as file:
                     file.write(content)
 
             await asyncio.to_thread(_write)
-            return f"Wrote content to {filename}"
+            return f"Wrote content to {file_path}"
         except Exception as e:
             return f"Error writing to file: {str(e)}"

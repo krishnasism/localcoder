@@ -93,13 +93,18 @@ FS_READ_ONLY_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file in the current working directory.",
+            "description": (
+                "Read the contents of a file relative to the current working directory. "
+                "Accepts OS-native or forward-slash paths (e.g. src/app.py or src\\app.py)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "description": "The name of the file to read.",
+                        "description": (
+                            "Relative or absolute file path. Forward or backslash separators are fine."
+                        ),
                     }
                 },
                 "required": ["filename"],
