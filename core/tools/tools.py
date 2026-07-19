@@ -12,6 +12,7 @@ READ_ONLY_TOOL_REGISTRATIONS: dict[str, callable] = {
 }
 TOOL_REGISTRATIONS: dict[str, callable] = {
     "sed": Shell.sed,
+    "insert_after": Shell.insert_after,
     "write_file": Shell.write_file,
     "find_files": Shell.find_files,
     "search_text_in_files": Shell.search_text_in_files,
@@ -173,10 +174,12 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
         "function": {
             "name": "sed",
             "description": (
-                "Replace exactly one occurrence of old_string in a file. "
-                "old_string must match the file content exactly (including whitespace). "
-                "If old_string appears more than once, pass `line` (1-based) to target one line. "
-                "Returns EDIT_FAILED when the match is missing or ambiguous."
+                "Replace exactly ONE occurrence of old_string in a file. "
+                "One change location per call — for two different inserts/edits, call sed "
+                "(or insert_after) twice. "
+                "To add lines after existing text, prefer insert_after, or set new_string to "
+                "old_string plus the new lines. "
+                "old_string must match uniquely; if ambiguous, pass `line` (1-based)."
             ),
             "parameters": {
                 "type": "object",
@@ -187,19 +190,56 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
                     },
                     "old_string": {
                         "type": "string",
-                        "description": "The string to be replaced.",
+                        "description": "The exact text to replace (unique in the file).",
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "The string to replace with.",
+                        "description": (
+                            "Replacement text. To insert lines after a marker, include the "
+                            "marker plus the new lines in new_string."
+                        ),
                     },
                     "line": {
                         "type": "integer",
-                        "description": "The line number to modify (1-based index).",
+                        "description": "Optional 1-based line to disambiguate matches.",
                         "minimum": 1,
                     },
                 },
                 "required": ["filename", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "insert_after",
+            "description": (
+                "Insert new content immediately after a unique marker string in a file. "
+                "Best for adding one or more new lines. "
+                "For two different insert locations, call insert_after twice."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "File to modify.",
+                    },
+                    "marker": {
+                        "type": "string",
+                        "description": "Exact existing text to insert after (must be unique).",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Text to insert (can be multiple lines).",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Optional 1-based line number to insert after.",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["filename", "marker", "content"],
             },
         },
     },

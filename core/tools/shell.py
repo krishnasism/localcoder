@@ -326,12 +326,30 @@ class Shell:
             return f"Error generating directory tree: {str(e)}"
 
     @staticmethod
+    def _detect_newline(content: str) -> str:
+        if "\r\n" in content:
+            return "\r\n"
+        if "\r" in content:
+            return "\r"
+        return "\n"
+
+    @staticmethod
+    def _to_lf(text: str) -> str:
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
+    @staticmethod
+    def _from_lf(text: str, newline: str) -> str:
+        if newline == "\n":
+            return text
+        return text.replace("\n", newline)
+
+    @staticmethod
     async def read_file(filename: str, line: int = None) -> str:
         try:
             file_path = Shell._resolve_path(filename)
 
             def _read() -> str:
-                with open(file_path, "r") as file:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as file:
                     if line is not None:
                         lines = file.readlines()
                         if 0 <= line - 1 < len(lines):
@@ -351,42 +369,54 @@ class Shell:
             file_path = Shell._resolve_path(filename)
 
             def _sed() -> str:
-                with open(file_path, "r") as file:
+                with open(file_path, "r", encoding="utf-8", errors="replace", newline="") as file:
                     content = file.read()
 
+                newline = Shell._detect_newline(content)
+                content_lf = Shell._to_lf(content)
+                old_lf = Shell._to_lf(old_string)
+                new_lf = Shell._to_lf(new_string)
+
+                if not old_lf:
+                    return "EDIT_FAILED: old_string is empty."
+
                 if line is not None:
-                    lines = content.splitlines(keepends=True)
+                    lines = content_lf.splitlines(keepends=True)
                     if not (0 <= line - 1 < len(lines)):
                         return (
                             f"EDIT_FAILED: line {line} is out of range in {file_path} "
                             f"(file has {len(lines)} lines). Read the file first."
                         )
                     line_text = lines[line - 1]
-                    if old_string not in line_text:
+                    if old_lf not in Shell._to_lf(line_text):
                         return (
                             f"EDIT_FAILED: old_string not found on line {line} of {file_path}. "
                             f"Read the file and copy the exact text from that line."
                         )
-                    lines[line - 1] = line_text.replace(old_string, new_string, 1)
-                    updated = "".join(lines)
+                    lines[line - 1] = line_text.replace(old_lf, new_lf, 1)
+                    updated_lf = "".join(lines)
                     replacements = 1
                 else:
-                    occurrences = content.count(old_string)
+                    occurrences = content_lf.count(old_lf)
                     if occurrences == 0:
                         return (
                             f"EDIT_FAILED: old_string not found in {file_path}. "
-                            "Read the file and copy the exact text to replace."
+                            "Read the file and copy the exact text to replace. "
+                            "Tip: include surrounding lines for uniqueness, and use one "
+                            "sed call per change location."
                         )
                     if occurrences > 1:
                         return (
                             f"EDIT_FAILED: old_string appears {occurrences} times in {file_path}. "
                             "Use the `line` parameter or include more surrounding context "
-                            "so old_string matches exactly once."
+                            "so old_string matches exactly once. "
+                            "For two separate inserts, call sed/insert_after twice."
                         )
-                    updated = content.replace(old_string, new_string, 1)
+                    updated_lf = content_lf.replace(old_lf, new_lf, 1)
                     replacements = 1
 
-                with open(file_path, "w") as file:
+                updated = Shell._from_lf(updated_lf, newline)
+                with open(file_path, "w", encoding="utf-8", newline="") as file:
                     file.write(updated)
                 return (
                     f"SUCCESS: replaced {replacements} occurrence(s) in {file_path}. "
@@ -398,6 +428,68 @@ class Shell:
             return f"Error performing sed operation: {str(e)}"
 
     @staticmethod
+    async def insert_after(
+        filename: str, marker: str, content: str, line: int = None
+    ) -> str:
+        """Insert content immediately after a unique marker string (or a specific line)."""
+        try:
+            file_path = Shell._resolve_path(filename)
+
+            def _insert() -> str:
+                with open(file_path, "r", encoding="utf-8", errors="replace", newline="") as file:
+                    original = file.read()
+
+                newline = Shell._detect_newline(original)
+                original_lf = Shell._to_lf(original)
+                marker_lf = Shell._to_lf(marker)
+                insert_lf = Shell._to_lf(content)
+
+                if not marker_lf:
+                    return "EDIT_FAILED: marker is empty."
+
+                if not insert_lf.endswith("\n"):
+                    insert_lf = insert_lf + "\n"
+
+                if line is not None:
+                    lines = original_lf.splitlines(keepends=True)
+                    if not (0 <= line - 1 < len(lines)):
+                        return (
+                            f"EDIT_FAILED: line {line} is out of range in {file_path} "
+                            f"(file has {len(lines)} lines)."
+                        )
+                    # Insert after this 1-based line.
+                    lines.insert(line, insert_lf)
+                    updated_lf = "".join(lines)
+                else:
+                    occurrences = original_lf.count(marker_lf)
+                    if occurrences == 0:
+                        return (
+                            f"EDIT_FAILED: marker not found in {file_path}. "
+                            "Copy the exact text to insert after."
+                        )
+                    if occurrences > 1:
+                        return (
+                            f"EDIT_FAILED: marker appears {occurrences} times in {file_path}. "
+                            "Pass `line` or include more surrounding context in marker. "
+                            "For two different inserts, call insert_after twice."
+                        )
+                    idx = original_lf.find(marker_lf)
+                    end = idx + len(marker_lf)
+                    # Prefer inserting after the trailing newline of the matched line.
+                    if end < len(original_lf) and original_lf[end] == "\n":
+                        end += 1
+                    updated_lf = original_lf[:end] + insert_lf + original_lf[end:]
+
+                updated = Shell._from_lf(updated_lf, newline)
+                with open(file_path, "w", encoding="utf-8", newline="") as file:
+                    file.write(updated)
+                return f"SUCCESS: inserted content after marker in {file_path}."
+
+            return await asyncio.to_thread(_insert)
+        except Exception as e:
+            return f"Error inserting into file: {str(e)}"
+
+    @staticmethod
     async def write_file(filename: str, content: str) -> str:
         try:
             file_path = Shell._resolve_path(filename)
@@ -406,7 +498,7 @@ class Shell:
                 parent = os.path.dirname(file_path)
                 if parent:
                     os.makedirs(parent, exist_ok=True)
-                with open(file_path, "w") as file:
+                with open(file_path, "w", encoding="utf-8", newline="") as file:
                     file.write(content)
 
             await asyncio.to_thread(_write)

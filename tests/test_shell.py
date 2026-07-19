@@ -377,6 +377,47 @@ class TestShellNonFileOperations:
         finally:
             self._restore(original_dir)
 
+    def test_sed_handles_crlf_files(self):
+        td, original_dir = self._chdir_to_temp()
+        try:
+            path = os.path.join(td, "crlf.txt")
+            with open(path, "wb") as handle:
+                handle.write(b"alpha\r\nbeta\r\ngamma\r\n")
+            result = asyncio.run(Shell.sed("crlf.txt", "beta", "BETA"))
+            assert result.startswith("SUCCESS")
+            with open(path, "rb") as handle:
+                raw = handle.read()
+            assert b"BETA" in raw
+            assert b"\r\n" in raw
+        finally:
+            self._restore(original_dir)
+
+    def test_insert_after_adds_lines(self):
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.write_file("app.txt", "one\ntwo\nthree\n"))
+            result = asyncio.run(
+                Shell.insert_after("app.txt", "two", "inserted-a\ninserted-b")
+            )
+            assert result.startswith("SUCCESS")
+            content = asyncio.run(Shell.read_file("app.txt"))
+            assert content == "one\ntwo\ninserted-a\ninserted-b\nthree\n"
+        finally:
+            self._restore(original_dir)
+
+    def test_insert_after_two_locations_separately(self):
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.write_file("app.txt", "alpha\nbeta\ngamma\n"))
+            first = asyncio.run(Shell.insert_after("app.txt", "alpha", "A1"))
+            second = asyncio.run(Shell.insert_after("app.txt", "gamma", "G1"))
+            assert first.startswith("SUCCESS")
+            assert second.startswith("SUCCESS")
+            content = asyncio.run(Shell.read_file("app.txt"))
+            assert content == "alpha\nA1\nbeta\ngamma\nG1\n"
+        finally:
+            self._restore(original_dir)
+
     # -- error paths for existing methods --
 
     def test_write_file_error(self):

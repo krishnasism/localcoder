@@ -614,6 +614,7 @@ class CodeAgent:
                                     "path",
                                     "command",
                                     "pattern",
+                                    "marker",
                                 )
                             },
                         },
