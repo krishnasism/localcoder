@@ -58,7 +58,7 @@ uv pip install -r requirements-dev.txt
 ### 2. Local model (Ollama)
 
 ```sh
-ollama pull qwen3.6
+ollama pull qwen3-coder
 ```
 
 Defaults:
@@ -67,7 +67,7 @@ Defaults:
 |----------|---------|
 | `OPENAI_API_BASE_URL` | `http://localhost:11434/v1` |
 | `OPENAI_API_KEY` | `local` |
-| `LOCALCODER_MODEL` | `qwen3.6` |
+| `LOCALCODER_MODEL` | `qwen3-coder` |
 | `LOCALCODER_MAX_ITERATIONS` | `25` (editing) |
 | `LOCALCODER_PLANNING_MAX_ITERATIONS` | `5` |
 

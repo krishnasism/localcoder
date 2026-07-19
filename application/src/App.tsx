@@ -46,7 +46,7 @@ const API_BASE_URL =
   "http://127.0.0.1:8000";
 
 const AVAILABLE_MODELS = [
-  "qwen3.6",
+  "qwen3-coder",
   "qwen2.5:7b",
   "llama-3.2",
   "llama2-uncensored:7b",
@@ -257,7 +257,7 @@ export default function App() {
   const [path, setPath] = useState(DEFAULT_PATH);
   const [query, setQuery] = useState("");
   const [model, setModel] = useState(
-    () => window.localStorage.getItem("localcoder.model") ?? "qwen3.6"
+    () => window.localStorage.getItem("localcoder.model") ?? "qwen3-coder"
   );
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);

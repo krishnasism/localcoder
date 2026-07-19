@@ -6,16 +6,16 @@ from core.agent.config import AgentConfig, load_agent_config
 class TestAgentConfigDataclass:
     def test_default_values(self):
         config = AgentConfig()
-        assert config.model == "qwen3.6"
-        assert config.planning_model == "qwen3.6"
-        assert config.editing_model == "qwen3.6"
+        assert config.model == "qwen3-coder"
+        assert config.planning_model == "qwen3-coder"
+        assert config.editing_model == "qwen3-coder"
         assert config.openai_base_url == "http://localhost:11434/v1"
         assert config.openai_api_key == "local"
-        assert config.max_iterations == 25
+        assert config.max_iterations == 35
         assert config.planning_max_iterations == 5
         assert config.trivial_max_iterations == 8
-        assert config.medium_max_iterations == 12
-        assert config.medium_planning_max_iterations == 2
+        assert config.medium_max_iterations == 18
+        assert config.medium_planning_max_iterations == 3
         assert config.llm_temperature == 0.0
         assert config.llm_timeout_seconds == 120.0
 
@@ -78,11 +78,13 @@ class TestLoadAgentConfig:
         mock_getenv.side_effect = lambda key, default: default
 
         config = load_agent_config()
-        assert config.model == "qwen3.6"
+        assert config.model == "qwen3-coder"
         assert config.openai_base_url == "http://localhost:11434/v1"
         assert config.openai_api_key == "local"
-        assert config.max_iterations == 25
+        assert config.max_iterations == 35
         assert config.planning_max_iterations == 5
+        assert config.medium_max_iterations == 18
+        assert config.medium_planning_max_iterations == 3
 
     @mock.patch("os.getenv")
     def test_max_iterations_converted_to_int(self, mock_getenv):

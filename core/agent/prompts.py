@@ -62,7 +62,7 @@ Rules:
 - Do not restart discovery. Do not call list_files/get_directory_tree.
 - Do not repeat the same tool call.
 - Use `pytest` for tests, not shell activate/collect loops.
-- Call `finish` as soon as the plan is done.
+- Call `finish` only after every plan step is done (or clearly blocked). Do not finish after scaffolding.
 - {_OS_BLOCK}
 
 Workflow: edit one location → next location → verify if needed → finish

@@ -28,6 +28,24 @@ def test_classify_hard_implement_feature():
     assert classify_prompt(prompt) == "hard"
 
 
+def test_classify_hard_multi_thread_chat():
+    prompt = (
+        "Add functionality to run multiple chat threads at once. "
+        "Now it is possible to run only one session."
+    )
+    assert classify_prompt(prompt) == "hard"
+
+
+def test_classify_hard_add_functionality_no_file():
+    prompt = "Add functionality for concurrent sessions in the desktop app"
+    assert classify_prompt(prompt) == "hard"
+
+
+def test_classify_hard_two_named_files():
+    prompt = "Update api.py and App.tsx to support session IDs"
+    assert classify_prompt(prompt) == "hard"
+
+
 def test_synthetic_plan_includes_file():
     plan = synthetic_plan_for_prompt("Rename title in App.tsx to Localcoder")
     assert "App.tsx" in plan

@@ -38,6 +38,7 @@ from core.agent.utils import (
     looks_like_missing_task_claim,
     looks_like_plan,
     materialize_tool_calls,
+    parse_plan_steps,
     reset_nudge_tracking,
     resolve_target_directory,
     should_skip_assistant_message,
@@ -182,6 +183,18 @@ class CodeAgent:
         if step == "planning":
             return self.planning_model
         return self.editing_model
+
+    def _min_edits_before_auto_finish(self, context: AgentContext) -> int:
+        """Avoid declaring victory after scaffolding a multi-step feature."""
+        if context.complexity == "trivial":
+            return 1
+        plan_steps = len(parse_plan_steps(context.plan))
+        if context.complexity == "hard":
+            return max(6, min(plan_steps, 10))
+        return max(3, min(plan_steps, 6))
+
+    def _should_auto_finish_after_progress(self, context: AgentContext) -> bool:
+        return context.successful_edits >= self._min_edits_before_auto_finish(context)
 
     def _limits_for_complexity(self, complexity: str) -> tuple[int, int, bool]:
         """Return (planning_max_iterations, editing_max_iterations, skip_planning)."""
@@ -927,20 +940,28 @@ class CodeAgent:
                     return fallback
 
                 if context.successful_edits > 0:
-                    summary = build_completion_summary(context)
-                    await self._emit(
-                        on_event,
-                        {
-                            "type": "status",
-                            "step": step,
-                            "message": "Wrapping up after progress to avoid a loop.",
-                        },
-                    )
-                    if on_finish is not None:
-                        resolved = await on_finish(summary)
-                        if resolved is not None:
-                            summary = resolved
-                    return summary
+                    if not self._should_auto_finish_after_progress(context):
+                        remaining_hint = (
+                            f"Approved plan still has unfinished work "
+                            f"({context.successful_edits} edit(s) so far). "
+                            "Continue the next concrete plan step — do not call finish yet."
+                        )
+                        append_nudge(context, "continue_plan", remaining_hint)
+                    else:
+                        summary = build_completion_summary(context)
+                        await self._emit(
+                            on_event,
+                            {
+                                "type": "status",
+                                "step": step,
+                                "message": "Wrapping up after progress to avoid a loop.",
+                            },
+                        )
+                        if on_finish is not None:
+                            resolved = await on_finish(summary)
+                            if resolved is not None:
+                                summary = resolved
+                        return summary
 
                 append_nudge(
                     context, "execution_reminder", build_execution_reminder(context)
@@ -1204,7 +1225,7 @@ class CodeAgent:
             on_finish=_on_finish,
             stagnant_limit=2
             if complexity == "trivial"
-            else (3 if complexity == "medium" else 4),
+            else (4 if complexity == "medium" else 5),
             cancel_event=cancel_event,
         )
         await self._emit(
