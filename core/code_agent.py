@@ -216,6 +216,37 @@ class CodeAgent:
             f"4. Call finish"
         )
 
+    @staticmethod
+    def _best_plan_from_messages(messages: list, prompt: str) -> str | None:
+        """Prefer a real plan the model already wrote over the generic fallback."""
+        for message in reversed(messages):
+            if message.get("role") != "assistant":
+                continue
+            content = (message.get("content") or "").strip()
+            if content and is_actionable_plan(content):
+                return content
+            for tool_call in message.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                if function.get("name") != "plan_finish":
+                    continue
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    continue
+                summary = str(args.get("summary") or "").strip()
+                if summary and is_actionable_plan(summary):
+                    return summary
+        return None
+
+    def _resolve_fallback_plan(self, context: AgentContext) -> str:
+        recovered = self._best_plan_from_messages(
+            context.messages, context.current_task
+        )
+        if recovered:
+            logger.info("Recovered actionable plan from history instead of generic fallback.")
+            return recovered
+        return self._fallback_plan(context.current_task)
+
     def _track_tool_usage(
         self, context: AgentContext, tool_name: str, args: dict, result: str
     ) -> None:
@@ -730,7 +761,7 @@ class CodeAgent:
 
             if stagnant_iterations >= stagnant_limit * 2:
                 if step == "planning":
-                    fallback = self._fallback_plan(context.current_task)
+                    fallback = self._resolve_fallback_plan(context)
                     await self.plan_finish(summary=fallback)
                     await self._emit_plan(on_event, fallback)
                     await self._emit(
@@ -738,7 +769,7 @@ class CodeAgent:
                         {
                             "type": "status",
                             "step": step,
-                            "message": "Using fallback plan.",
+                            "message": "Continuing with best available plan.",
                         },
                     )
                     return fallback
@@ -784,7 +815,7 @@ class CodeAgent:
 
             if consecutive_structure_only_iterations >= structure_only_limit * 2:
                 if step == "planning":
-                    fallback = self._fallback_plan(context.current_task)
+                    fallback = self._resolve_fallback_plan(context)
                     await self.plan_finish(summary=fallback)
                     await self._emit_plan(on_event, fallback)
                     return fallback
@@ -812,7 +843,7 @@ class CodeAgent:
             return summary
 
         if step == "planning":
-            fallback = self._fallback_plan(context.current_task)
+            fallback = self._resolve_fallback_plan(context)
             await self.plan_finish(summary=fallback)
             await self._emit_plan(on_event, fallback)
             return fallback

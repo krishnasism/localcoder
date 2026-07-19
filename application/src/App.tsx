@@ -224,7 +224,12 @@ export default function App() {
   useEffect(() => {
     const container = feedRef.current;
     if (!container) return;
-    container.scrollTop = container.scrollHeight;
+    // Keep the latest message in view without fighting manual scroll-up.
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 160 || isStreaming) {
+      container.scrollTop = container.scrollHeight;
+    }
   }, [feed, isStreaming]);
 
   useEffect(() => {

@@ -267,9 +267,12 @@ textarea {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 18px 20px 8px;
   display: flex;
   flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
   gap: 12px;
 }
 
@@ -319,6 +322,7 @@ textarea {
 }
 
 .bubble {
+  flex: 0 0 auto;
   max-width: min(760px, 100%);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
@@ -387,12 +391,13 @@ textarea {
 }
 
 .activity {
+  flex: 0 0 auto;
   align-self: stretch;
   max-width: min(760px, 100%);
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   background: rgba(18, 21, 27, 0.7);
-  overflow: hidden;
+  overflow: clip;
   animation: rise 0.18s ease;
 }
 
@@ -402,8 +407,7 @@ textarea {
 
 .activity-toggle {
   width: 100%;
-  display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
@@ -412,6 +416,7 @@ textarea {
   color: var(--text-muted);
   cursor: pointer;
   text-align: left;
+  min-height: 36px;
 }
 
 .activity-toggle:hover {
@@ -419,17 +424,22 @@ textarea {
 }
 
 .activity-icon {
+  flex: 0 0 auto;
   color: var(--accent-text);
   font-size: 12px;
 }
 
 .activity-title {
+  flex: 0 1 auto;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .activity-hint {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-dim);
   font-family: var(--mono);
@@ -439,6 +449,8 @@ textarea {
 }
 
 .activity-caret {
+  flex: 0 0 auto;
+  margin-left: auto;
   color: var(--text-dim);
   font-size: 11px;
 }
@@ -459,6 +471,7 @@ textarea {
 }
 
 .thinking-row {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
