@@ -13,10 +13,12 @@ from core.agent.utils import (
     EDIT_TOOLS,
     EMBEDDED_TOOL_NUDGE,
     MAX_IDENTICAL_TOOL_REPEATS,
+    MAX_PLANNING_FILE_READS,
     MAX_SAME_FILE_READS,
     PLANNING_CLARIFICATION_NUDGE,
     PLANNING_NO_PLAN_NUDGE,
     PLANNING_REJECTION_MESSAGE,
+    PLANNING_SNAPSHOT_CHARS,
     READ_LIMIT_NUDGE,
     REPEATED_TOOL_NUDGE,
     STRUCTURE_TOOLS,
@@ -285,7 +287,12 @@ class CodeAgent:
         return repeats
 
     def _should_block_tool(
-        self, context: AgentContext, tool_name: str, args: dict, repeats: int
+        self,
+        context: AgentContext,
+        tool_name: str,
+        args: dict,
+        repeats: int,
+        step: str = "editing",
     ) -> str | None:
         if repeats >= MAX_IDENTICAL_TOOL_REPEATS:
             return (
@@ -294,6 +301,13 @@ class CodeAgent:
             )
 
         if tool_name == "read_file":
+            total_reads = sum(context.file_read_counts.values())
+            if step == "planning" and total_reads >= MAX_PLANNING_FILE_READS:
+                return (
+                    "Blocked: planning allows at most "
+                    f"{MAX_PLANNING_FILE_READS} file reads. "
+                    "Call plan_finish now with a numbered plan for the user task."
+                )
             filename = args.get("filename")
             if (
                 filename
@@ -308,7 +322,6 @@ class CodeAgent:
             sig.startswith(f"{tool_name}:")
             for sig in context.recent_tool_signatures[:-1]
         ):
-            # Soft block only after we already recorded a prior structure call.
             prior = sum(
                 1
                 for sig in context.recent_tool_signatures[:-1]
@@ -454,8 +467,12 @@ class CodeAgent:
             # Keep the authoritative task visible in the system prompt every turn.
             self._refresh_system_prompt(context, step)
 
-            # Re-anchor the task periodically so long tool histories don't bury it.
-            if context.iteration > 1 and context.iteration % 4 == 0:
+            # Re-anchor the task only during longer editing runs.
+            if (
+                step == "editing"
+                and context.iteration > 1
+                and context.iteration % 5 == 0
+            ):
                 context.messages.append(
                     {
                         "role": "user",
@@ -465,6 +482,18 @@ class CodeAgent:
                     }
                 )
                 reset_nudge_tracking(context)
+
+            # Planning must finish quickly — nudge once after the first tool round.
+            if step == "planning" and context.iteration == 2:
+                append_nudge(
+                    context,
+                    "planning_timebox",
+                    (
+                        "Time box: call plan_finish NOW with a short numbered plan "
+                        f"for this task:\n{context.current_task}\n"
+                        "Do not read more files unless absolutely required."
+                    ),
+                )
 
             await self._emit(
                 on_event,
@@ -567,7 +596,7 @@ class CodeAgent:
                         iteration_had_repeated_tool = True
 
                     block_reason = self._should_block_tool(
-                        context, tool_call.function.name, args, repeats
+                        context, tool_call.function.name, args, repeats, step=step
                     )
                     await self._emit(
                         on_event,
@@ -614,7 +643,9 @@ class CodeAgent:
                             "type": "tool_result",
                             "step": step,
                             "tool": tool_call.function.name,
-                            "result": truncate_for_context(result_text, 6000),
+                            "result": truncate_for_context(
+                                result_text, 2500 if step == "planning" else 4000
+                            ),
                             "blocked": block_reason is not None,
                         },
                     )
@@ -631,7 +662,9 @@ class CodeAgent:
                     context.messages.append(
                         {
                             "role": "tool",
-                            "content": result_text,
+                            "content": truncate_for_context(
+                                result_text, 2500 if step == "planning" else 4000
+                            ),
                             "tool_call_id": tool_call.id,
                         }
                     )
@@ -870,8 +903,12 @@ class CodeAgent:
 
             target_dir = resolve_target_directory(path)
             change_dir_result = await Shell.change_directory(target_dir)
-            initial_files = truncate_for_context(await Shell.list_files())
-            initial_tree = truncate_for_context(await Shell.get_directory_tree())
+            initial_files = truncate_for_context(
+                await Shell.list_files(), PLANNING_SNAPSHOT_CHARS // 2
+            )
+            initial_tree = truncate_for_context(
+                await Shell.get_directory_tree(max_depth=2), PLANNING_SNAPSHOT_CHARS
+            )
 
             context = AgentContext(
                 current_task=prompt,
@@ -900,7 +937,7 @@ class CodeAgent:
             finish_tool="plan_finish",
             on_event=on_event,
             on_finish=_plan_finish,
-            stagnant_limit=3,
+            stagnant_limit=2,
             cancel_event=cancel_event,
         )
 
@@ -924,8 +961,12 @@ class CodeAgent:
 
         target_dir = resolve_target_directory(path)
         change_dir_result = await Shell.change_directory(target_dir)
-        initial_files = truncate_for_context(await Shell.list_files())
-        initial_tree = truncate_for_context(await Shell.get_directory_tree())
+        initial_files = truncate_for_context(
+            await Shell.list_files(), PLANNING_SNAPSHOT_CHARS // 2
+        )
+        initial_tree = truncate_for_context(
+            await Shell.get_directory_tree(max_depth=2), PLANNING_SNAPSHOT_CHARS
+        )
 
         context = AgentContext(
             current_task=prompt,

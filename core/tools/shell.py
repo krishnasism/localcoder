@@ -276,9 +276,24 @@ class Shell:
             return f"Error listing files: {str(e)}"
 
     @staticmethod
-    async def get_directory_tree(path: str | None = None) -> str:
+    async def get_directory_tree(
+        path: str | None = None, max_depth: int = 3
+    ) -> str:
         try:
             base_dir = Shell._resolve_directory(path)
+            skip_names = {
+                ".git",
+                "node_modules",
+                ".venv",
+                "venv",
+                "__pycache__",
+                "dist",
+                "build",
+                ".next",
+                "coverage",
+                ".pytest_cache",
+                ".ruff_cache",
+            }
 
             def _tree() -> str:
                 if not os.path.isdir(base_dir):
@@ -288,12 +303,22 @@ class Shell:
                     )
                 tree = []
                 for root, dirs, files in os.walk(base_dir):
-                    level = root.replace(base_dir, "").count(os.sep)
+                    rel = os.path.relpath(root, base_dir)
+                    level = 0 if rel == "." else rel.count(os.sep) + 1
+                    if level > max_depth:
+                        dirs[:] = []
+                        continue
+                    dirs[:] = [d for d in dirs if d not in skip_names and not d.startswith(".")]
                     indent = " " * 4 * level
-                    tree.append(f"{indent}{os.path.basename(root)}{os.path.sep}")
+                    label = os.path.basename(root) if rel != "." else os.path.basename(base_dir)
+                    tree.append(f"{indent}{label}{os.path.sep}")
                     subindent = " " * 4 * (level + 1)
-                    for f in files:
+                    for f in files[:40]:
+                        if f.startswith("."):
+                            continue
                         tree.append(f"{subindent}{f}")
+                    if len(files) > 40:
+                        tree.append(f"{subindent}... ({len(files) - 40} more files)")
                 return "\n".join(tree)
 
             return await asyncio.to_thread(_tree)

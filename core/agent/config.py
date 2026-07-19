@@ -10,8 +10,8 @@ class AgentConfig:
     model: str = "qwen3.6"
     openai_base_url: str = "http://localhost:11434/v1"
     openai_api_key: str = "local"
-    max_iterations: int = 40
-    planning_max_iterations: int = 12
+    max_iterations: int = 25
+    planning_max_iterations: int = 5
 
 
 def load_agent_config() -> AgentConfig:
@@ -22,8 +22,8 @@ def load_agent_config() -> AgentConfig:
     model = _getenv("LOCALCODER_MODEL", "qwen3.6")
     openai_base_url = _getenv("OPENAI_API_BASE_URL", "http://localhost:11434/v1")
     openai_api_key = _getenv("OPENAI_API_KEY", "local")
-    max_iterations_str = _getenv("LOCALCODER_MAX_ITERATIONS", "40")
-    planning_max_iterations_str = _getenv("LOCALCODER_PLANNING_MAX_ITERATIONS", "12")
+    max_iterations_str = _getenv("LOCALCODER_MAX_ITERATIONS", "25")
+    planning_max_iterations_str = _getenv("LOCALCODER_PLANNING_MAX_ITERATIONS", "5")
     logger.info(
         "Loaded agent config: model=%s, openai_base_url=%s, "
         "max_iterations=%s, planning_max_iterations=%s",

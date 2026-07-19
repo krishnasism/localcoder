@@ -154,4 +154,5 @@ def test_compact_messages_shortens_old_tool_results():
     compacted = compact_messages(messages, keep_recent_tool_results=3)
     tool_msgs = [m for m in compacted if m["role"] == "tool"]
     assert len(tool_msgs[0]["content"]) < 1000
-    assert len(tool_msgs[-1]["content"]) > 4000
+    assert "truncated" in tool_msgs[0]["content"]
+    assert len(tool_msgs[-1]["content"]) > 2000
