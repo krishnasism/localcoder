@@ -85,6 +85,65 @@ function formatToolArgs(args?: Record<string, unknown>) {
     .join(" · ");
 }
 
+function describeLiveStatus(event: StreamEvent): string | null {
+  if (event.type === "tool_start" && event.tool) {
+    const filename = String(
+      event.args?.filename ?? event.args?.path ?? event.args?.src ?? ""
+    );
+    const short = filename ? filename.replace(/^.*[/\\]/, "") : "";
+    switch (event.tool) {
+      case "read_file":
+        return short ? `Reading ${short}…` : "Reading file…";
+      case "sed":
+        return short ? `Editing ${short}…` : "Editing file…";
+      case "insert_after":
+        return short ? `Inserting into ${short}…` : "Inserting lines…";
+      case "write_file":
+        return short ? `Writing ${short}…` : "Writing file…";
+      case "pytest":
+      case "pytest_with_coverage":
+        return "Running tests…";
+      case "search_text_in_files":
+        return "Searching codebase…";
+      case "find_files":
+        return "Finding files…";
+      case "plan_finish":
+        return "Finalizing plan…";
+      case "finish":
+        return "Wrapping up…";
+      default:
+        return short ? `${event.tool} · ${short}…` : `Running ${event.tool}…`;
+    }
+  }
+
+  if (event.type === "tool_result" && event.tool) {
+    if (event.blocked) return `${event.tool} blocked — trying another approach…`;
+    return `Finished ${event.tool}`;
+  }
+
+  if (event.type === "status" && event.message) {
+    return event.message;
+  }
+
+  if (event.type === "assistant_message") {
+    return "Thinking…";
+  }
+
+  if (event.type === "plan") {
+    return "Plan ready — starting edits…";
+  }
+
+  if (event.type === "final") {
+    return "Done";
+  }
+
+  if (event.type === "error") {
+    return event.message ?? "Error";
+  }
+
+  return null;
+}
+
 function eventToActivity(event: StreamEvent): AgentActivity | null {
   const createdAt = new Date().toISOString();
   const id = createId();
@@ -203,8 +262,12 @@ export default function App() {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [phase, setPhase] = useState("Idle");
+  const [liveStatus, setLiveStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const toggleTheme = () =>
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   const feedRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -243,6 +306,11 @@ export default function App() {
       setPhase(phaseLabel(event.step));
     }
 
+    const status = describeLiveStatus(event);
+    if (status) {
+      setLiveStatus(status);
+    }
+
     const activity = eventToActivity(event);
     if (!activity) return;
 
@@ -276,6 +344,7 @@ export default function App() {
     abortRef.current = null;
     setIsStreaming(false);
     setPhase("Cancelled");
+    setLiveStatus("");
     setFeed((current) => [
       ...current,
       {
@@ -295,6 +364,7 @@ export default function App() {
     setFeed([]);
     setError(null);
     setPhase("Idle");
+    setLiveStatus("");
   }
 
   async function handleSubmit(event?: FormEvent<HTMLFormElement>) {
@@ -307,6 +377,7 @@ export default function App() {
     setError(null);
     setIsStreaming(true);
     setPhase("Planning");
+    setLiveStatus("Starting…");
     setQuery("");
     setFeed((current) => [
       ...current,
@@ -414,6 +485,7 @@ export default function App() {
         abortRef.current = null;
       }
       setIsStreaming(false);
+      setLiveStatus("");
       textareaRef.current?.focus();
     }
   }
@@ -491,6 +563,11 @@ export default function App() {
                 phase
               )}
             </span>
+            {isStreaming && liveStatus ? (
+              <span className="live-status" title={liveStatus}>
+                {liveStatus}
+              </span>
+            ) : null}
           </div>
           <div className="topbar-right">
             <span className="meta-chip">{feed.filter((i) => i.role === "user").length} prompts</span>
@@ -629,11 +706,11 @@ export default function App() {
           })}
 
           {isStreaming ? (
-            <div className="thinking-row" aria-hidden="true">
+            <div className="thinking-row" aria-live="polite">
               <span className="thinking-dot" />
               <span className="thinking-dot" />
               <span className="thinking-dot" />
-              <span>Working…</span>
+              <span>{liveStatus || "Working…"}</span>
             </div>
           ) : null}
         </section>
