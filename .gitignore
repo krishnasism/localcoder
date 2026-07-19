@@ -32,6 +32,13 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!packaging/**/*.spec
+packaging/dist/
+packaging/build/
+application/out/
+application/resources/backend/*
+!application/resources/backend/.gitkeep
+!application/resources/backend/.gitignore
 
 # Installer logs
 pip-log.txt

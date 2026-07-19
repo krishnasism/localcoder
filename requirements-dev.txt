@@ -3,3 +3,4 @@ ruff
 ty
 pytest
 coverage
+pyinstaller

@@ -1,7 +1,8 @@
 {
-  "name": "application",
+  "name": "localcoder",
+  "productName": "Localcoder",
   "version": "1.0.0",
-  "description": "Local code editor for agentic programming",
+  "description": "Local agentic coding assistant",
   "keywords": [
     "agents",
     "ai",
@@ -26,8 +27,10 @@
     "build": "vite build",
     "start": "electron-forge start",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "package": "electron-forge package",
-    "make": "electron-forge make"
+    "package": "npm run build && electron-forge package",
+    "make": "npm run build && electron-forge make",
+    "make:win": "npm run build && electron-forge make --platform=win32",
+    "dist": "npm run make"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",

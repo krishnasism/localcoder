@@ -1,0 +1,68 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q
+
+  build-windows:
+    needs: test-python
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build backend API exe
+        run: python packaging/build_backend.py
+
+      - name: Install frontend dependencies
+        working-directory: application
+        run: npm install
+
+      - name: Make Windows installers
+        working-directory: application
+        run: npm run make:win
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: localcoder-windows
+          path: |
+            application/out/make/**/*.exe
+            application/out/make/**/*.nupkg
+            application/out/make/zip/**/*
+            application/resources/backend/localcoder-api.exe
+          if-no-files-found: warn

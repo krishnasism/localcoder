@@ -113,10 +113,52 @@ python main.py explain_code --query "Explain what this module does" --path "C:\U
 pytest -q
 ```
 
-## Notes
+## Package as a standalone app (Windows)
 
-- Keep path inputs absolute for best results (well idk)
-- If the model starts repeating, try with a more precise prompt
+Localcoder is an Electron desktop UI plus a FastAPI backend. Packaging builds both into a shareable Windows installer / zip.
+
+### Local build
+
+From the repo root (venv active):
+
+```sh
+# 1) Build the Python API into application/resources/backend/localcoder-api.exe
+python packaging/build_backend.py
+
+# 2) Build the Electron app + Windows installer
+cd application
+npm install
+npm run make:win
+```
+
+Outputs land in `application/out/make/`:
+
+- `squirrel.windows/.../LocalcoderSetup.exe` — installer (recommended for sharing)
+- `zip/win32/...` — portable zip
+
+The packaged app starts the bundled API automatically. Recipients still need a local model server (e.g. Ollama on `http://localhost:11434`).
+
+### CI / CD
+
+GitHub Actions workflows:
+
+- [`.github/workflows/build.yml`](.github/workflows/build.yml) — on push/PR: run tests and upload Windows artifacts
+- [`.github/workflows/release.yml`](.github/workflows/release.yml) — on `v*` tags (or manual dispatch): publish a GitHub Release with the `.exe` files
+
+Create a release:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Or run **Release** from the Actions tab (`workflow_dispatch`).
+
+### Notes
+
+- Unsigned Windows builds may show SmartScreen warnings until you add code signing.
+- macOS/Linux makers are configured in Forge; CI currently focuses on Windows `.exe` as requested.
+- Dev mode is unchanged: run `uvicorn api:app --reload` and `npm run dev` separately.
 
 ## Example
 
