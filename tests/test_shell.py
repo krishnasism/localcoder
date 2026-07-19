@@ -142,6 +142,24 @@ class TestShellNonFileOperations:
 
     # -- search_text_in_files --
 
+    def test_search_text_in_files_skips_node_modules(self):
+        td, original_dir = self._chdir_to_temp()
+        try:
+            os.makedirs(os.path.join(td, "node_modules", "pkg"), exist_ok=True)
+            with open(
+                os.path.join(td, "node_modules", "pkg", "index.js"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write("secret_marker_xyz\n")
+            with open(os.path.join(td, "app.js"), "w", encoding="utf-8") as f:
+                f.write("secret_marker_xyz\n")
+            result = asyncio.run(Shell.search_text_in_files("secret_marker_xyz"))
+            assert "app.js" in result
+            assert "node_modules" not in result
+        finally:
+            self._restore(original_dir)
+
     def test_search_text_in_files_matching(self):
         """search_text should find lines containing the pattern."""
         td, original_dir = self._chdir_to_temp()
@@ -352,6 +370,20 @@ class TestShellNonFileOperations:
             assert "bb" not in content
             assert "ZZ" in content
             assert content.count("ZZ") == 1
+        finally:
+            self._restore(original_dir)
+
+    def test_search_replace_preferred_alias(self):
+        """search_replace should behave like sed for unique replacements."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.write_file("ui.txt", "label = Save\n"))
+            result = asyncio.run(
+                Shell.search_replace("ui.txt", "label = Save", "label = Submit")
+            )
+            assert "SUCCESS" in result
+            content = asyncio.run(Shell.read_file("ui.txt"))
+            assert content == "label = Submit\n"
         finally:
             self._restore(original_dir)
 

@@ -40,6 +40,7 @@ def truncate_for_context(text: str, max_chars: int = 12000) -> str:
 
 EDIT_TOOLS = frozenset(
     {
+        "search_replace",
         "sed",
         "insert_after",
         "write_file",

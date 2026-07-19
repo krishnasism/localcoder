@@ -1,11 +1,14 @@
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from core.agent.complexity import classify_prompt, synthetic_plan_for_prompt
 from core.agent.config import load_agent_config
 from core.agent.models import AgentContext, FinishResult
 from core.agent.prompts import (
     build_editing_system_prompt,
+    build_fast_editing_system_prompt,
     build_planning_system_prompt,
 )
+from core.agent.snapshot_cache import gather_project_snapshot
 from core.agent.toolsets import build_tool_registry
 from core.agent.utils import (
     DISCOVERY_LOOP_NUDGE,
@@ -49,6 +52,7 @@ from dataclasses import asdict
 import asyncio
 import inspect
 import json
+import time
 from typing import Any, AsyncGenerator, Awaitable, Callable
 import logging
 
@@ -66,9 +70,12 @@ class CodeAgent:
 
         self.config = load_agent_config()
         self.model = self.config.model
+        self.planning_model = self.config.planning_model or self.config.model
+        self.editing_model = self.config.editing_model or self.config.model
         self.client = AsyncOpenAI(
             base_url=self.config.openai_base_url,
             api_key=self.config.openai_api_key,
+            timeout=self.config.llm_timeout_seconds,
         )
 
         tool_registry = build_tool_registry(
@@ -78,6 +85,7 @@ class CodeAgent:
 
         self.file_system_tools = tool_registry.file_system_tools
         self.editing_tools = tool_registry.editing_tools
+        self.lean_editing_tools = tool_registry.lean_editing_tools
         self.read_only_file_system_tools = tool_registry.read_only_file_system_tools
         self.read_only_planning_tools = tool_registry.read_only_planning_tools
         self.tool_registrations = tool_registry.tool_registrations
@@ -171,13 +179,61 @@ class CodeAgent:
             },
         }
 
-    async def __call_llm(self, context: AgentContext, tools: list) -> str:
-        logging.info(f"Model: {self.model}, Tools: {len(tools)}")
+    def _model_for_step(self, step: str) -> str:
+        if step == "planning":
+            return self.planning_model
+        return self.editing_model
+
+    def _limits_for_complexity(self, complexity: str) -> tuple[int, int, bool]:
+        """Return (planning_max_iterations, editing_max_iterations, skip_planning)."""
+        if complexity == "trivial":
+            return 0, self.config.trivial_max_iterations, True
+        if complexity == "medium":
+            return (
+                self.config.medium_planning_max_iterations,
+                self.config.medium_max_iterations,
+                False,
+            )
+        return (
+            self.config.planning_max_iterations,
+            self.config.max_iterations,
+            False,
+        )
+
+    async def _prepare_workspace_snapshot(
+        self,
+        path: str,
+        on_event: EventCallback | None = None,
+    ) -> tuple[str, str, str]:
+        target_dir = resolve_target_directory(path)
+        change_dir_result = await Shell.change_directory(target_dir)
+        files_raw, tree_raw, meta = await gather_project_snapshot(
+            max_depth=2,
+            ttl_seconds=self.config.snapshot_cache_ttl_seconds,
+        )
+        await self._emit(
+            on_event,
+            {
+                "type": "timing",
+                "step": "initializing",
+                "phase": "snapshot",
+                "ms": meta.get("snapshot_ms", 0),
+                "cache_hit": meta.get("cache_hit", False),
+            },
+        )
+        initial_files = truncate_for_context(files_raw, PLANNING_SNAPSHOT_CHARS // 2)
+        initial_tree = truncate_for_context(tree_raw, PLANNING_SNAPSHOT_CHARS)
+        return change_dir_result, initial_files, initial_tree
+
+    async def __call_llm(self, context: AgentContext, tools: list, step: str = "editing"):
+        model = self._model_for_step(step)
+        logging.info(f"Model: {model}, Tools: {len(tools)}, step={step}")
         return await self.client.chat.completions.create(
-            model=self.model,
+            model=model,
             messages=context.messages,
             tools=tools,
             tool_choice="auto",
+            temperature=self.config.llm_temperature,
         )
 
     @staticmethod
@@ -400,8 +456,15 @@ class CodeAgent:
         change_dir_result: str,
         initial_files: str,
         initial_tree: str,
+        *,
+        mode: str = "planning",
     ) -> str:
         # Put the task at both ends — local models attend best to edges of long context.
+        closing = (
+            "Plan concrete file-level changes for THIS task, then call plan_finish."
+            if mode == "planning"
+            else "Execute THIS task now with search_replace/insert_after, then call finish."
+        )
         return (
             "========== USER TASK (COMPLETE — DO NOT ASK FOR CLARIFICATION) ==========\n"
             f"{prompt}\n"
@@ -415,7 +478,7 @@ class CodeAgent:
             f"Tree:\n{initial_tree}\n\n"
             "========== USER TASK REMINDER ==========\n"
             f"{prompt}\n"
-            "Plan concrete file-level changes for THIS task, then call plan_finish."
+            f"{closing}"
         )
 
     def _refresh_system_prompt(self, context: AgentContext, step: str) -> None:
@@ -427,9 +490,14 @@ class CodeAgent:
                 "content": build_planning_system_prompt(context.current_task),
             }
         elif step == "editing":
+            builder = (
+                build_fast_editing_system_prompt
+                if context.skip_planning or context.complexity == "trivial"
+                else build_editing_system_prompt
+            )
             context.messages[0] = {
                 "role": "system",
-                "content": build_editing_system_prompt(
+                "content": builder(
                     context.current_task, context.plan or "(no plan yet)"
                 ),
             }
@@ -505,7 +573,19 @@ class CodeAgent:
                     "max_iterations": context.max_iterations,
                 },
             )
-            response = await self.__call_llm(context, tools)
+            llm_started = time.perf_counter()
+            response = await self.__call_llm(context, tools, step=step)
+            await self._emit(
+                on_event,
+                {
+                    "type": "timing",
+                    "step": step,
+                    "phase": "llm",
+                    "ms": round((time.perf_counter() - llm_started) * 1000, 1),
+                    "iteration": context.iteration,
+                    "model": self._model_for_step(step),
+                },
+            )
             await self._ensure_not_cancelled(cancel_event)
             message = response.choices[0].message
             resolved_tool_calls = materialize_tool_calls(
@@ -737,6 +817,41 @@ class CodeAgent:
                     if any(name in DISCOVERY_TOOLS for name in tool_names):
                         context.discovery_iterations += 1
 
+            # Trivial fast-path: once an edit lands, wrap up instead of wandering.
+            if (
+                step == "editing"
+                and context.complexity == "trivial"
+                and context.successful_edits > 0
+                and iterations_without_edit >= 1
+            ):
+                summary = build_completion_summary(context)
+                await self._emit(
+                    on_event,
+                    {
+                        "type": "status",
+                        "step": step,
+                        "message": "Simple task complete — wrapping up.",
+                    },
+                )
+                if on_finish is not None:
+                    resolved = await on_finish(summary)
+                    if resolved is not None:
+                        summary = resolved
+                return summary
+
+            if (
+                step == "editing"
+                and context.complexity == "trivial"
+                and iteration_had_edit
+                and not iteration_had_edit_failure
+                and context.successful_edits > 0
+            ):
+                append_nudge(
+                    context,
+                    "trivial_finish",
+                    "Simple edit applied. Call finish NOW with a one-line summary.",
+                )
+
             if used_embedded_tools:
                 append_nudge(context, "embedded_tools", EMBEDDED_TOOL_NUDGE)
 
@@ -902,19 +1017,15 @@ class CodeAgent:
                 {"type": "status", "step": "planning", "message": "Planning started."},
             )
 
-            target_dir = resolve_target_directory(path)
-            change_dir_result = await Shell.change_directory(target_dir)
-            initial_files = truncate_for_context(
-                await Shell.list_files(), PLANNING_SNAPSHOT_CHARS // 2
-            )
-            initial_tree = truncate_for_context(
-                await Shell.get_directory_tree(max_depth=2), PLANNING_SNAPSHOT_CHARS
+            change_dir_result, initial_files, initial_tree = (
+                await self._prepare_workspace_snapshot(path, on_event=on_event)
             )
 
             context = AgentContext(
                 current_task=prompt,
                 working_directory=Shell.current_directory,
                 max_iterations=self.config.planning_max_iterations,
+                complexity=classify_prompt(prompt),
             )
             context.messages = [
                 {"role": "system", "content": build_planning_system_prompt(prompt)},
@@ -949,98 +1060,155 @@ class CodeAgent:
         on_event: EventCallback | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> str:
+        run_started = time.perf_counter()
+        complexity = classify_prompt(prompt)
+        planning_max, editing_max, skip_planning = self._limits_for_complexity(
+            complexity
+        )
+
         await self._emit(
             on_event,
             {
                 "type": "status",
                 "step": "initializing",
-                "message": "Initializing code generation.",
+                "message": f"Initializing ({complexity} task).",
+                "complexity": complexity,
+                "skip_planning": skip_planning,
             },
         )
         self.agent_state_manager.update_state("initializing")
         await self._ensure_not_cancelled(cancel_event)
 
-        target_dir = resolve_target_directory(path)
-        change_dir_result = await Shell.change_directory(target_dir)
-        initial_files = truncate_for_context(
-            await Shell.list_files(), PLANNING_SNAPSHOT_CHARS // 2
-        )
-        initial_tree = truncate_for_context(
-            await Shell.get_directory_tree(max_depth=2), PLANNING_SNAPSHOT_CHARS
+        change_dir_result, initial_files, initial_tree = (
+            await self._prepare_workspace_snapshot(path, on_event=on_event)
         )
 
         context = AgentContext(
             current_task=prompt,
             working_directory=Shell.current_directory,
-            max_iterations=self.config.planning_max_iterations,
+            max_iterations=planning_max if not skip_planning else editing_max,
+            complexity=complexity,
+            skip_planning=skip_planning,
         )
-        context.messages = [
-            {"role": "system", "content": build_planning_system_prompt(prompt)},
-            {
-                "role": "user",
-                "content": self._build_initial_user_message(
-                    prompt, path, change_dir_result, initial_files, initial_tree
-                ),
-            },
-        ]
 
-        plan = await self.generate_plan_of_action(
-            prompt,
-            path,
-            on_event=on_event,
-            context=context,
-            cancel_event=cancel_event,
-        )
-        context.plan = plan
-        logger.debug(f"Plan generated: {context.plan}")
+        if skip_planning:
+            plan = synthetic_plan_for_prompt(prompt)
+            context.plan = plan
+            await self._emit(
+                on_event,
+                {
+                    "type": "status",
+                    "step": "planning",
+                    "message": "Skipped planning for simple prompt.",
+                    "complexity": complexity,
+                },
+            )
+            await self._emit_plan(on_event, plan)
+            await self.plan_finish(summary=plan)
+            context.messages = [
+                {
+                    "role": "system",
+                    "content": build_fast_editing_system_prompt(prompt, plan),
+                },
+                {
+                    "role": "user",
+                    "content": self._build_initial_user_message(
+                        prompt,
+                        path,
+                        change_dir_result,
+                        initial_files,
+                        initial_tree,
+                        mode="editing",
+                    ),
+                },
+            ]
+        else:
+            context.messages = [
+                {"role": "system", "content": build_planning_system_prompt(prompt)},
+                {
+                    "role": "user",
+                    "content": self._build_initial_user_message(
+                        prompt, path, change_dir_result, initial_files, initial_tree
+                    ),
+                },
+            ]
 
-        await self._ensure_not_cancelled(cancel_event)
+            plan = await self.generate_plan_of_action(
+                prompt,
+                path,
+                on_event=on_event,
+                context=context,
+                cancel_event=cancel_event,
+            )
+            context.plan = plan
+            logger.debug(f"Plan generated: {context.plan}")
 
-        context.messages[0] = {
-            "role": "system",
-            "content": build_editing_system_prompt(prompt, context.plan),
-        }
+            await self._ensure_not_cancelled(cancel_event)
+
+            already_read = ", ".join(sorted(context.files_read)) or "none"
+            context.messages = [
+                {
+                    "role": "system",
+                    "content": build_editing_system_prompt(prompt, context.plan),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Planning is complete. Fresh execution context (planning "
+                        "transcript discarded to save tokens).\n\n"
+                        "========== USER TASK ==========\n"
+                        f"{prompt}\n"
+                        "========== APPROVED PLAN ==========\n"
+                        f"{context.plan}\n"
+                        "========== ALREADY READ ==========\n"
+                        f"{already_read}\n"
+                        "========== END ==========\n\n"
+                        "Execute this plan now. Do not restart discovery. "
+                        "Prefer search_replace. Make concrete edits one step at a time "
+                        "and call finish when done."
+                    ),
+                },
+            ]
+            # Allow re-reads during editing after the planning transcript is dropped.
+            context.file_read_counts = {}
+
         context.iteration = 0
-        context.max_iterations = self.config.max_iterations
+        context.max_iterations = editing_max
         context.discovery_iterations = 0
         context.recent_tool_signatures = []
         reset_nudge_tracking(context)
-        context.messages = compact_messages(
-            context.messages, keep_recent_tool_results=8
-        )
-        context.messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "Planning is complete. Switch to execution mode.\n\n"
-                    "========== USER TASK ==========\n"
-                    f"{prompt}\n"
-                    "========== APPROVED PLAN ==========\n"
-                    f"{context.plan}\n"
-                    "========== END ==========\n\n"
-                    "Execute this plan now. Your prior file reads in this conversation "
-                    "are still valid — do not restart discovery. "
-                    "Make concrete edits one step at a time and call finish when done."
-                ),
-            }
-        )
 
         async def _on_finish(summary: str) -> str:
             self.agent_state_manager.update_state("completed")
             await self.finish(summary=summary)
             return summary
 
-        return await self._run_agent_loop(
+        result = await self._run_agent_loop(
             context=context,
-            tools=self.editing_tools,
+            tools=(
+                self.lean_editing_tools
+                if complexity == "trivial"
+                else self.editing_tools
+            ),
             tool_registrations=self.tool_registrations,
             step="editing",
             finish_tool="finish",
             on_event=on_event,
             on_finish=_on_finish,
-            stagnant_limit=4,
+            stagnant_limit=2 if complexity == "trivial" else (3 if complexity == "medium" else 4),
             cancel_event=cancel_event,
         )
+        await self._emit(
+            on_event,
+            {
+                "type": "timing",
+                "step": "completed",
+                "phase": "total",
+                "ms": round((time.perf_counter() - run_started) * 1000, 1),
+                "complexity": complexity,
+            },
+        )
+        return result
 
     async def generate_code_stream(
         self,

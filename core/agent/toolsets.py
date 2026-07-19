@@ -13,10 +13,23 @@ from core.tools.tools import (
 class AgentToolRegistry:
     file_system_tools: list
     editing_tools: list
+    lean_editing_tools: list
     read_only_file_system_tools: list
     read_only_planning_tools: list
     tool_registrations: dict
     read_only_tool_registrations: dict
+
+
+_LEAN_EDITING_ALLOW = frozenset(
+    {
+        "read_file",
+        "search_replace",
+        "sed",
+        "insert_after",
+        "write_file",
+        "finish",
+    }
+)
 
 
 def build_tool_registry(finish_fn, plan_finish_fn) -> AgentToolRegistry:
@@ -27,6 +40,11 @@ def build_tool_registry(finish_fn, plan_finish_fn) -> AgentToolRegistry:
         tool
         for tool in file_system_tools
         if tool["function"]["name"] not in {"list_files", "get_directory_tree"}
+    ]
+    lean_editing_tools = [
+        tool
+        for tool in editing_tools
+        if tool["function"]["name"] in _LEAN_EDITING_ALLOW
     ]
 
     read_only_file_system_tools = list(FS_READ_ONLY_TOOLS)
@@ -72,6 +90,7 @@ def build_tool_registry(finish_fn, plan_finish_fn) -> AgentToolRegistry:
     return AgentToolRegistry(
         file_system_tools=file_system_tools,
         editing_tools=editing_tools,
+        lean_editing_tools=lean_editing_tools,
         read_only_file_system_tools=read_only_file_system_tools,
         read_only_planning_tools=read_only_planning_tools,
         tool_registrations=tool_registrations,

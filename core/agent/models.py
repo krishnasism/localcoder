@@ -23,6 +23,8 @@ class AgentContext:
     last_nudge_kind: str = ""
     iterations_since_reminder: int = 0
     successful_edits: int = 0
+    complexity: str = "hard"
+    skip_planning: bool = False
 
 
 @dataclass

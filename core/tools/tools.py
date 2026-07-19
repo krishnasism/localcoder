@@ -11,6 +11,7 @@ READ_ONLY_TOOL_REGISTRATIONS: dict[str, callable] = {
     "setup_python_virtual_env": PythonTools().setup_python_virtual_env,
 }
 TOOL_REGISTRATIONS: dict[str, callable] = {
+    "search_replace": Shell.search_replace,
     "sed": Shell.sed,
     "insert_after": Shell.insert_after,
     "write_file": Shell.write_file,
@@ -172,11 +173,47 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
     {
         "type": "function",
         "function": {
+            "name": "search_replace",
+            "description": (
+                "Preferred edit tool. Replace exactly ONE occurrence of old_string "
+                "with new_string in a file. Include enough surrounding context so the "
+                "match is unique. One change location per call — for two edits, call "
+                "search_replace twice."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The file to modify.",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "Exact text to find (must be unique in the file).",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "Replacement text.",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Optional 1-based line to disambiguate matches.",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["filename", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "sed",
             "description": (
+                "Alias of search_replace — prefer search_replace. "
                 "Replace exactly ONE occurrence of old_string in a file. "
-                "One change location per call — for two different inserts/edits, call sed "
-                "(or insert_after) twice. "
+                "One change location per call — for two different inserts/edits, call "
+                "search_replace (or insert_after) twice. "
                 "To add lines after existing text, prefer insert_after, or set new_string to "
                 "old_string plus the new lines. "
                 "old_string must match uniquely; if ambiguous, pass `line` (1-based)."

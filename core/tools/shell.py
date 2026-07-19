@@ -42,15 +42,42 @@ class Shell:
             return f"Error getting parent folder: {str(e)}"
 
     @staticmethod
-    async def find_files(pattern: str) -> str:
+    def _walk_skip_names() -> set[str]:
+        return {
+            ".git",
+            "node_modules",
+            ".venv",
+            "venv",
+            "__pycache__",
+            "dist",
+            "build",
+            ".next",
+            "coverage",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".tox",
+            ".mypy_cache",
+            "out",
+            "target",
+        }
+
+    @staticmethod
+    async def find_files(pattern: str, max_matches: int = 80) -> str:
         try:
 
             def _find() -> str:
-                matches = []
+                skip = Shell._walk_skip_names()
+                matches: list[str] = []
                 for root, dirs, files in os.walk(Shell.current_directory):
+                    dirs[:] = [d for d in dirs if d not in skip]
                     for filename in files:
                         if pattern in filename:
                             matches.append(os.path.join(root, filename))
+                            if len(matches) >= max_matches:
+                                matches.append(
+                                    f"... truncated after {max_matches} matches"
+                                )
+                                return "\n".join(matches)
                 return "\n".join(matches)
 
             return await asyncio.to_thread(_find)
@@ -58,20 +85,30 @@ class Shell:
             return f"Error finding files: {str(e)}"
 
     @staticmethod
-    async def search_text_in_files(pattern: str) -> str:
+    async def search_text_in_files(pattern: str, max_matches: int = 60) -> str:
         try:
 
             def _search() -> str:
-                matches = []
+                skip = Shell._walk_skip_names()
+                matches: list[str] = []
                 for root, dirs, files in os.walk(Shell.current_directory):
+                    dirs[:] = [d for d in dirs if d not in skip]
                     for filename in files:
                         file_path = os.path.join(root, filename)
-                        with open(file_path, "r", errors="ignore") as file:
-                            for line_number, line in enumerate(file, start=1):
-                                if pattern in line:
-                                    matches.append(
-                                        f"{file_path}:{line_number}: {line.strip()}"
-                                    )
+                        try:
+                            with open(file_path, "r", errors="ignore") as file:
+                                for line_number, line in enumerate(file, start=1):
+                                    if pattern in line:
+                                        matches.append(
+                                            f"{file_path}:{line_number}: {line.strip()}"
+                                        )
+                                        if len(matches) >= max_matches:
+                                            matches.append(
+                                                f"... truncated after {max_matches} matches"
+                                            )
+                                            return "\n".join(matches)
+                        except OSError:
+                            continue
                 return "\n".join(matches)
 
             return await asyncio.to_thread(_search)
@@ -281,19 +318,7 @@ class Shell:
     ) -> str:
         try:
             base_dir = Shell._resolve_directory(path)
-            skip_names = {
-                ".git",
-                "node_modules",
-                ".venv",
-                "venv",
-                "__pycache__",
-                "dist",
-                "build",
-                ".next",
-                "coverage",
-                ".pytest_cache",
-                ".ruff_cache",
-            }
+            skip_names = Shell._walk_skip_names()
 
             def _tree() -> str:
                 if not os.path.isdir(base_dir):
@@ -426,6 +451,18 @@ class Shell:
             return await asyncio.to_thread(_sed)
         except Exception as e:
             return f"Error performing sed operation: {str(e)}"
+
+    @staticmethod
+    async def search_replace(
+        filename: str, old_string: str, new_string: str, line: int = None
+    ) -> str:
+        """Preferred patch-style edit: replace one unique occurrence of old_string."""
+        return await Shell.sed(
+            filename=filename,
+            old_string=old_string,
+            new_string=new_string,
+            line=line,
+        )
 
     @staticmethod
     async def insert_after(
