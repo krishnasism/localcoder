@@ -9,7 +9,8 @@ class TestAgentConfigDataclass:
         assert config.model == "qwen3.6"
         assert config.openai_base_url == "http://localhost:11434/v1"
         assert config.openai_api_key == "local"
-        assert config.max_iterations == 50
+        assert config.max_iterations == 40
+        assert config.planning_max_iterations == 12
 
     def test_custom_values(self):
         config = AgentConfig(
@@ -17,11 +18,13 @@ class TestAgentConfigDataclass:
             openai_base_url="https://api.openai.com/v1",
             openai_api_key="sk-test-key",
             max_iterations=100,
+            planning_max_iterations=8,
         )
         assert config.model == "gpt-4"
         assert config.openai_base_url == "https://api.openai.com/v1"
         assert config.openai_api_key == "sk-test-key"
         assert config.max_iterations == 100
+        assert config.planning_max_iterations == 8
 
     def test_asdict_conversion(self):
         config = AgentConfig(model="claude-3", max_iterations=25)
@@ -39,6 +42,7 @@ class TestLoadAgentConfig:
             "OPENAI_API_BASE_URL": "http://custom.host:9000/v1",
             "OPENAI_API_KEY": "env-key-123",
             "LOCALCODER_MAX_ITERATIONS": "75",
+            "LOCALCODER_PLANNING_MAX_ITERATIONS": "9",
         }.get(key, default)
 
         config = load_agent_config()
@@ -46,24 +50,25 @@ class TestLoadAgentConfig:
         assert config.openai_base_url == "http://custom.host:9000/v1"
         assert config.openai_api_key == "env-key-123"
         assert config.max_iterations == 75
+        assert config.planning_max_iterations == 9
 
     @mock.patch("os.getenv")
     def test_load_with_defaults(self, mock_getenv):
         # When env vars are not set, defaults should be used
-        mock_getenv.return_value = None
+        mock_getenv.side_effect = lambda key, default: default
 
         config = load_agent_config()
         assert config.model == "qwen3.6"
         assert config.openai_base_url == "http://localhost:11434/v1"
         assert config.openai_api_key == "local"
-        assert config.max_iterations == 100
+        assert config.max_iterations == 40
+        assert config.planning_max_iterations == 12
 
     @mock.patch("os.getenv")
     def test_max_iterations_converted_to_int(self, mock_getenv):
         mock_getenv.side_effect = lambda key, default: {
             "LOCALCODER_MAX_ITERATIONS": "99",
         }.get(key, default)
-        # other keys already handled by the dict.get() above via side_effect
 
         config = load_agent_config()
         assert isinstance(config.max_iterations, int)

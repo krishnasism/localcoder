@@ -1,6 +1,8 @@
 from core.agent.models import AgentContext
 from core.agent.utils import (
+    append_nudge,
     build_execution_reminder,
+    compact_messages,
     extract_tool_calls_from_content,
     is_actionable_plan,
     is_edit_failure,
@@ -110,3 +112,32 @@ def test_build_execution_reminder_includes_plan_and_files():
     assert "fix tests" in reminder
     assert "config.py" in reminder
     assert "1. Edit config.py" in reminder
+
+
+def test_append_nudge_dedupes_same_kind():
+    context = AgentContext()
+    assert append_nudge(context, "stagnant", "first")
+    assert not append_nudge(context, "stagnant", "second")
+    assert len([m for m in context.messages if m["role"] == "user"]) == 1
+    assert append_nudge(context, "discovery_loop", "third")
+    assert len([m for m in context.messages if m["role"] == "user"]) == 2
+
+
+def test_compact_messages_shortens_old_tool_results():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+    ]
+    for index in range(8):
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": f"c{index}",
+                "content": "x" * 5000,
+            }
+        )
+
+    compacted = compact_messages(messages, keep_recent_tool_results=3)
+    tool_msgs = [m for m in compacted if m["role"] == "tool"]
+    assert len(tool_msgs[0]["content"]) < 1000
+    assert len(tool_msgs[-1]["content"]) > 4000

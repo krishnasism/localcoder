@@ -66,6 +66,13 @@ DISCOVERY_TOOLS = frozenset(
     }
 )
 
+STRUCTURE_TOOLS = frozenset({"list_files", "get_directory_tree"})
+
+MAX_SAME_FILE_READS = 3
+MAX_IDENTICAL_TOOL_REPEATS = 2
+TOOL_RESULT_KEEP_CHARS = 4000
+COMPACT_TOOL_RESULT_CHARS = 800
+
 
 def is_tool_error(result: str) -> bool:
     lowered = result.lower()
@@ -73,6 +80,7 @@ def is_tool_error(result: str) -> bool:
         lowered.startswith("error")
         or lowered.startswith("tool '")
         or lowered.startswith("unknown tool")
+        or lowered.startswith("blocked:")
     )
 
 
@@ -185,7 +193,9 @@ REPEATED_TOOL_NUDGE = (
     "in context, make a concrete file edit with sed/write_file, or call finish."
 )
 
-EMBEDDED_TOOL_NUDGE = "Do not print tool JSON in chat text. Invoke tools through the tool-calling API only."
+EMBEDDED_TOOL_NUDGE = (
+    "Do not print tool JSON in chat text. Invoke tools through the tool-calling API only."
+)
 
 DISCOVERY_LOOP_NUDGE = (
     "Stop running discovery commands (shell, pytest collect, list_files, repeated reads). "
@@ -193,9 +203,19 @@ DISCOVERY_LOOP_NUDGE = (
     "use the `pytest` tool to verify — not run_shell_command."
 )
 
+READ_LIMIT_NUDGE = (
+    "You have already read this file enough times. Do not read it again. "
+    "Either edit it with sed/write_file using the content you already have, "
+    "or move to the next plan step / call finish."
+)
+
 
 def tool_call_signature(tool_name: str, args: dict) -> str:
     return f"{tool_name}:{json.dumps(args, sort_keys=True, default=str)}"
+
+
+def count_recent_signature_matches(signatures: list[str], signature: str) -> int:
+    return sum(1 for item in signatures if item == signature)
 
 
 def extract_tool_calls_from_content(content: str | None) -> list[dict]:
@@ -276,6 +296,83 @@ def counts_as_editing_progress(tool_name: str, result_text: str) -> bool:
     return not is_tool_error(result_text) and not is_edit_failure(result_text)
 
 
+def append_nudge(context, kind: str, content: str) -> bool:
+    """Append a nudge at most once in a row for the same kind."""
+    if context.last_nudge_kind == kind and context.consecutive_nudge_count >= 1:
+        context.consecutive_nudge_count += 1
+        return False
+    context.messages.append({"role": "user", "content": content})
+    context.last_nudge_kind = kind
+    context.consecutive_nudge_count = 1
+    return True
+
+
+def reset_nudge_tracking(context) -> None:
+    context.last_nudge_kind = ""
+    context.consecutive_nudge_count = 0
+
+
+def compact_messages(messages: list, keep_recent_tool_results: int = 6) -> list:
+    """Shrink older tool results so long runs stay within context limits."""
+    if not messages:
+        return messages
+
+    tool_indices = [
+        index
+        for index, message in enumerate(messages)
+        if message.get("role") == "tool"
+    ]
+    if len(tool_indices) <= keep_recent_tool_results:
+        compacted = []
+        for message in messages:
+            if message.get("role") != "tool":
+                compacted.append(message)
+                continue
+            content = str(message.get("content") or "")
+            if len(content) > TOOL_RESULT_KEEP_CHARS:
+                compacted.append(
+                    {
+                        **message,
+                        "content": truncate_for_context(
+                            content, TOOL_RESULT_KEEP_CHARS
+                        ),
+                    }
+                )
+            else:
+                compacted.append(message)
+        return compacted
+
+    protect = set(tool_indices[-keep_recent_tool_results:])
+    compacted = []
+    for index, message in enumerate(messages):
+        if message.get("role") != "tool" or index in protect:
+            if message.get("role") == "tool":
+                content = str(message.get("content") or "")
+                if len(content) > TOOL_RESULT_KEEP_CHARS:
+                    compacted.append(
+                        {
+                            **message,
+                            "content": truncate_for_context(
+                                content, TOOL_RESULT_KEEP_CHARS
+                            ),
+                        }
+                    )
+                else:
+                    compacted.append(message)
+            else:
+                compacted.append(message)
+            continue
+
+        content = str(message.get("content") or "")
+        compacted.append(
+            {
+                **message,
+                "content": truncate_for_context(content, COMPACT_TOOL_RESULT_CHARS),
+            }
+        )
+    return compacted
+
+
 def build_execution_reminder(context) -> str:
     modified = ", ".join(sorted(context.files_modified)) or "none yet"
     read_files = ", ".join(sorted(context.files_read)) or "none yet"
@@ -287,8 +384,18 @@ def build_execution_reminder(context) -> str:
         f"- Original task: {context.current_task}\n"
         f"- Files read: {read_files}\n"
         f"- Files modified: {modified}\n"
+        f"- Successful edits so far: {context.successful_edits}\n"
         f"- Plan steps:\n{steps_block}\n"
         "Next action: make the next concrete file edit from the plan. "
         "Re-read a file only after you changed it or if an edit failed. "
         "Call finish when every planned change is done."
+    )
+
+
+def build_completion_summary(context) -> str:
+    modified = ", ".join(sorted(context.files_modified)) or "none"
+    return (
+        f"Completed work on: {context.current_task}\n"
+        f"Files modified: {modified}\n"
+        f"Successful edits: {context.successful_edits}"
     )

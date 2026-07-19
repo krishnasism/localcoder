@@ -9,19 +9,28 @@ from core.agent.utils import (
     DISCOVERY_TOOLS,
     EDIT_TOOLS,
     EMBEDDED_TOOL_NUDGE,
+    MAX_IDENTICAL_TOOL_REPEATS,
+    MAX_SAME_FILE_READS,
     PLANNING_CLARIFICATION_NUDGE,
     PLANNING_NO_PLAN_NUDGE,
     PLANNING_REJECTION_MESSAGE,
+    READ_LIMIT_NUDGE,
     REPEATED_TOOL_NUDGE,
+    STRUCTURE_TOOLS,
+    append_nudge,
     assistant_message_to_dict,
+    build_completion_summary,
     build_execution_reminder,
+    compact_messages,
     counts_as_editing_progress,
+    count_recent_signature_matches,
     is_actionable_plan,
     is_edit_failure,
     is_tool_error,
     looks_like_clarification_request,
     looks_like_plan,
     materialize_tool_calls,
+    reset_nudge_tracking,
     resolve_target_directory,
     should_skip_assistant_message,
     tool_call_signature,
@@ -38,6 +47,10 @@ import logging
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
+
+
+class AgentCancelled(Exception):
+    """Raised when the client cancels an in-flight agent run."""
 
 
 class CodeAgent:
@@ -72,6 +85,10 @@ class CodeAgent:
     ) -> None:
         if on_event is not None:
             await on_event(event)
+
+    async def _ensure_not_cancelled(self, cancel_event: asyncio.Event | None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise AgentCancelled("Agent run cancelled by client.")
 
     async def plan_finish(self, summary: str, artifacts: list[str] = None) -> dict:
         """
@@ -148,7 +165,7 @@ class CodeAgent:
         }
 
     async def __call_llm(self, context: AgentContext, tools: list) -> str:
-        logging.info(f"Model: {self.model}, Tools: {tools}")
+        logging.info(f"Model: {self.model}, Tools: {len(tools)}")
         return await self.client.chat.completions.create(
             model=self.model,
             messages=context.messages,
@@ -203,6 +220,9 @@ class CodeAgent:
             filename = args.get("filename")
             if filename:
                 context.files_read.add(filename)
+                context.file_read_counts[filename] = (
+                    context.file_read_counts.get(filename, 0) + 1
+                )
             return
 
         if tool_name not in EDIT_TOOLS:
@@ -215,15 +235,54 @@ class CodeAgent:
         filename = args.get("filename") or args.get("src")
         if filename:
             context.files_modified.add(filename)
+            # Allow one re-read after a successful edit of that file.
+            context.file_read_counts[filename] = 0
+        context.successful_edits += 1
 
     def _record_tool_signature(
         self, context: AgentContext, tool_name: str, args: dict
-    ) -> bool:
+    ) -> int:
         signature = tool_call_signature(tool_name, args)
-        repeated = signature in context.recent_tool_signatures[-3:]
+        repeats = count_recent_signature_matches(
+            context.recent_tool_signatures, signature
+        )
         context.recent_tool_signatures.append(signature)
-        context.recent_tool_signatures = context.recent_tool_signatures[-12:]
-        return repeated
+        context.recent_tool_signatures = context.recent_tool_signatures[-16:]
+        return repeats
+
+    def _should_block_tool(
+        self, context: AgentContext, tool_name: str, args: dict, repeats: int
+    ) -> str | None:
+        if repeats >= MAX_IDENTICAL_TOOL_REPEATS:
+            return (
+                f"Blocked: identical `{tool_name}` call already ran {repeats} times. "
+                "Use prior results, edit a file, or call finish/plan_finish."
+            )
+
+        if tool_name == "read_file":
+            filename = args.get("filename")
+            if filename and context.file_read_counts.get(filename, 0) >= MAX_SAME_FILE_READS:
+                return (
+                    f"Blocked: `{filename}` has already been read "
+                    f"{context.file_read_counts[filename]} times. {READ_LIMIT_NUDGE}"
+                )
+
+        if tool_name in STRUCTURE_TOOLS and any(
+            sig.startswith(f"{tool_name}:") for sig in context.recent_tool_signatures[:-1]
+        ):
+            # Soft block only after we already recorded a prior structure call.
+            prior = sum(
+                1
+                for sig in context.recent_tool_signatures[:-1]
+                if sig.startswith(f"{tool_name}:")
+            )
+            if prior >= 1:
+                return (
+                    f"Blocked: `{tool_name}` already provided. "
+                    "Use the existing snapshot and continue."
+                )
+
+        return None
 
     @staticmethod
     def _filter_tool_args(fn, args: dict) -> dict:
@@ -312,30 +371,37 @@ class CodeAgent:
         on_finish: Callable[[str], Awaitable[str | None]] | None = None,
         structure_only_tools: set[str] | None = None,
         stagnant_limit: int = 4,
-        structure_only_limit: int = 3,
+        structure_only_limit: int = 2,
+        cancel_event: asyncio.Event | None = None,
     ) -> str:
         allowed_tools = self._allowed_tool_names(tools)
-        structure_only_tools = structure_only_tools or {
-            "list_files",
-            "get_directory_tree",
-        }
+        structure_only_tools = structure_only_tools or set(STRUCTURE_TOOLS)
         consecutive_structure_only_iterations = 0
         stagnant_iterations = 0
         iterations_without_edit = 0
 
         while context.iteration < context.max_iterations:
+            await self._ensure_not_cancelled(cancel_event)
             context.iteration += 1
+            context.iterations_since_reminder += 1
             logger.info(f"Iteration {context.iteration} of {context.max_iterations}")
             self.agent_state_manager.update_state(step)
+
+            if context.iteration % 3 == 0:
+                context.messages = compact_messages(context.messages)
+
             await self._emit(
                 on_event,
                 {
                     "type": "status",
                     "step": step,
-                    "message": f"{step.title()} iteration {context.iteration}/{context.max_iterations}",
+                    "message": f"{step.title()} · step {context.iteration}/{context.max_iterations}",
+                    "iteration": context.iteration,
+                    "max_iterations": context.max_iterations,
                 },
             )
             response = await self.__call_llm(context, tools)
+            await self._ensure_not_cancelled(cancel_event)
             message = response.choices[0].message
             resolved_tool_calls = materialize_tool_calls(
                 message.tool_calls, message.content
@@ -370,8 +436,10 @@ class CodeAgent:
             iteration_had_edit = False
             iteration_had_edit_failure = False
             iteration_had_repeated_tool = False
+            iteration_had_blocked_tool = False
 
             for tool_call in resolved_tool_calls:
+                await self._ensure_not_cancelled(cancel_event)
                 tool_names.append(tool_call.function.name)
                 if tool_call.function.name == finish_tool:
                     summary = self._extract_finish_summary(tool_call, message)
@@ -385,11 +453,10 @@ class CodeAgent:
                         )
                         stagnant_iterations += 1
                         if looks_like_clarification_request(summary):
-                            context.messages.append(
-                                {
-                                    "role": "user",
-                                    "content": PLANNING_CLARIFICATION_NUDGE,
-                                }
+                            append_nudge(
+                                context,
+                                "planning_clarification",
+                                PLANNING_CLARIFICATION_NUDGE,
                             )
                         continue
 
@@ -410,26 +477,50 @@ class CodeAgent:
                         },
                     )
                     return summary
+
                 try:
                     args = self._safe_load_tool_args(tool_call.function.arguments)
-                    if self._record_tool_signature(
+                    repeats = self._record_tool_signature(
                         context, tool_call.function.name, args
-                    ):
+                    )
+                    if repeats >= 1:
                         iteration_had_repeated_tool = True
+
+                    block_reason = self._should_block_tool(
+                        context, tool_call.function.name, args, repeats
+                    )
                     await self._emit(
                         on_event,
                         {
                             "type": "tool_start",
                             "step": step,
                             "tool": tool_call.function.name,
+                            "args": {
+                                key: value
+                                for key, value in args.items()
+                                if key
+                                in (
+                                    "filename",
+                                    "src",
+                                    "path",
+                                    "command",
+                                    "pattern",
+                                )
+                            },
                         },
                     )
-                    result = await self._execute_tool(
-                        tool_call,
-                        tool_registrations,
-                        allowed_tool_names=allowed_tools,
-                    )
-                    result_text = str(result)
+
+                    if block_reason is not None:
+                        iteration_had_blocked_tool = True
+                        result_text = block_reason
+                    else:
+                        result = await self._execute_tool(
+                            tool_call,
+                            tool_registrations,
+                            allowed_tool_names=allowed_tools,
+                        )
+                        result_text = str(result)
+
                     self._track_tool_usage(
                         context, tool_call.function.name, args, result_text
                     )
@@ -443,16 +534,19 @@ class CodeAgent:
                             "type": "tool_result",
                             "step": step,
                             "tool": tool_call.function.name,
-                            "result": result_text,
+                            "result": truncate_for_context(result_text, 6000),
+                            "blocked": block_reason is not None,
                         },
                     )
-                    context.tool_results[tool_call.id] = result
+                    context.tool_results[tool_call.id] = result_text
                     if step == "planning" and not is_tool_error(result_text):
-                        iteration_had_progress = True
+                        if tool_call.function.name not in STRUCTURE_TOOLS:
+                            iteration_had_progress = True
                     elif counts_as_editing_progress(
                         tool_call.function.name, result_text
                     ):
                         iteration_had_progress = True
+                        reset_nudge_tracking(context)
 
                     context.messages.append(
                         {
@@ -484,14 +578,14 @@ class CodeAgent:
 
             if step == "planning" and message.content and not resolved_tool_calls:
                 if looks_like_clarification_request(message.content):
-                    context.messages.append(
-                        {"role": "user", "content": PLANNING_CLARIFICATION_NUDGE}
+                    append_nudge(
+                        context,
+                        "planning_clarification",
+                        PLANNING_CLARIFICATION_NUDGE,
                     )
                     stagnant_iterations += 2
                 elif not is_actionable_plan(message.content):
-                    context.messages.append(
-                        {"role": "user", "content": PLANNING_NO_PLAN_NUDGE}
-                    )
+                    append_nudge(context, "planning_no_plan", PLANNING_NO_PLAN_NUDGE)
                     stagnant_iterations += 1
                 elif looks_like_plan(message.content):
                     await self.plan_finish(summary=message.content)
@@ -503,7 +597,7 @@ class CodeAgent:
             else:
                 stagnant_iterations += 1
 
-            if iteration_had_edit:
+            if iteration_had_edit and not iteration_had_edit_failure:
                 iterations_without_edit = 0
                 context.discovery_iterations = 0
             elif resolved_tool_calls:
@@ -513,26 +607,20 @@ class CodeAgent:
                         context.discovery_iterations += 1
 
             if used_embedded_tools:
-                context.messages.append(
-                    {"role": "user", "content": EMBEDDED_TOOL_NUDGE}
-                )
+                append_nudge(context, "embedded_tools", EMBEDDED_TOOL_NUDGE)
 
-            if iteration_had_repeated_tool:
-                context.messages.append(
-                    {"role": "user", "content": REPEATED_TOOL_NUDGE}
-                )
-                stagnant_iterations += 2
+            if iteration_had_repeated_tool or iteration_had_blocked_tool:
+                append_nudge(context, "repeated_tool", REPEATED_TOOL_NUDGE)
+                stagnant_iterations += 1
 
-            if step == "editing" and context.discovery_iterations >= 4:
-                context.messages.append(
-                    {"role": "user", "content": DISCOVERY_LOOP_NUDGE}
-                )
+            if step == "editing" and context.discovery_iterations >= 3:
+                append_nudge(context, "discovery_loop", DISCOVERY_LOOP_NUDGE)
                 context.discovery_iterations = 0
                 stagnant_iterations += 2
 
             if (
                 step == "editing"
-                and iterations_without_edit >= 15
+                and iterations_without_edit >= 10
                 and not context.files_modified
             ):
                 raise RuntimeError(
@@ -541,24 +629,25 @@ class CodeAgent:
                 )
 
             if iteration_had_edit_failure:
-                context.messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "The last edit failed. Read the target file once, copy the exact "
-                            "text you need to change, then retry with `sed` or `write_file`. "
-                            "Do not explore unrelated files."
-                        ),
-                    }
+                append_nudge(
+                    context,
+                    "edit_failure",
+                    (
+                        "The last edit failed. Read the target file once, copy the exact "
+                        "text you need to change, then retry with `sed` or `write_file`. "
+                        "Do not explore unrelated files."
+                    ),
                 )
 
-            if step == "editing" and iterations_without_edit >= 2:
-                context.messages.append(
-                    {
-                        "role": "user",
-                        "content": build_execution_reminder(context),
-                    }
+            if (
+                step == "editing"
+                and iterations_without_edit >= 3
+                and context.iterations_since_reminder >= 4
+            ):
+                append_nudge(
+                    context, "execution_reminder", build_execution_reminder(context)
                 )
+                context.iterations_since_reminder = 0
                 iterations_without_edit = 0
 
             if stagnant_iterations >= stagnant_limit:
@@ -571,7 +660,7 @@ class CodeAgent:
                         "file change from the approved plan, then call finish."
                     )
                 )
-                context.messages.append({"role": "user", "content": nudge})
+                append_nudge(context, "stagnant", nudge)
 
             if stagnant_iterations >= stagnant_limit * 2:
                 if step == "planning":
@@ -587,11 +676,25 @@ class CodeAgent:
                         },
                     )
                     return fallback
-                context.messages.append(
-                    {
-                        "role": "user",
-                        "content": build_execution_reminder(context),
-                    }
+
+                if context.successful_edits > 0:
+                    summary = build_completion_summary(context)
+                    await self._emit(
+                        on_event,
+                        {
+                            "type": "status",
+                            "step": step,
+                            "message": "Wrapping up after progress to avoid a loop.",
+                        },
+                    )
+                    if on_finish is not None:
+                        resolved = await on_finish(summary)
+                        if resolved is not None:
+                            summary = resolved
+                    return summary
+
+                append_nudge(
+                    context, "execution_reminder", build_execution_reminder(context)
                 )
 
             if tool_names and set(tool_names).issubset(structure_only_tools):
@@ -611,26 +714,43 @@ class CodeAgent:
                         "Then call finish."
                     )
                 )
-                context.messages.append({"role": "user", "content": structure_nudge})
+                append_nudge(context, "structure", structure_nudge)
 
             if consecutive_structure_only_iterations >= structure_only_limit * 2:
                 if step == "planning":
-                    context.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "You are stuck in repeated list_files/get_directory_tree calls. "
-                                "Stop exploring. Produce a concise plan now and call plan_finish."
-                            ),
-                        }
-                    )
-                else:
-                    raise RuntimeError(
-                        "Editing is stuck in repeated list_files/get_directory_tree calls. "
-                        "Aborting to avoid an infinite loop."
-                    )
+                    fallback = self._fallback_plan(context.current_task)
+                    await self.plan_finish(summary=fallback)
+                    await self._emit_plan(on_event, fallback)
+                    return fallback
+                raise RuntimeError(
+                    "Editing is stuck in repeated list_files/get_directory_tree calls. "
+                    "Aborting to avoid an infinite loop."
+                )
 
         self.agent_state_manager.update_state("error")
+
+        if step == "editing" and context.successful_edits > 0:
+            summary = build_completion_summary(context)
+            await self._emit(
+                on_event,
+                {
+                    "type": "status",
+                    "step": step,
+                    "message": "Max iterations reached; returning completed work.",
+                },
+            )
+            if on_finish is not None:
+                resolved = await on_finish(summary)
+                if resolved is not None:
+                    summary = resolved
+            return summary
+
+        if step == "planning":
+            fallback = self._fallback_plan(context.current_task)
+            await self.plan_finish(summary=fallback)
+            await self._emit_plan(on_event, fallback)
+            return fallback
+
         raise RuntimeError(
             f"{step.title()} phase reached max iterations without calling {finish_tool}. "
             "Model likely did not emit the required completion tool call."
@@ -642,6 +762,7 @@ class CodeAgent:
         path: str,
         on_event: EventCallback | None = None,
         context: AgentContext | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> str:
         if context is None:
             self.agent_state_manager.update_state("planning")
@@ -658,7 +779,7 @@ class CodeAgent:
             context = AgentContext(
                 current_task=prompt,
                 working_directory=Shell.current_directory,
-                max_iterations=self.config.max_iterations,
+                max_iterations=self.config.planning_max_iterations,
             )
             context.messages = [
                 {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
@@ -683,6 +804,7 @@ class CodeAgent:
             on_event=on_event,
             on_finish=_plan_finish,
             stagnant_limit=3,
+            cancel_event=cancel_event,
         )
 
     async def generate_code(
@@ -690,6 +812,7 @@ class CodeAgent:
         prompt: str,
         path: str,
         on_event: EventCallback | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> str:
         await self._emit(
             on_event,
@@ -700,6 +823,7 @@ class CodeAgent:
             },
         )
         self.agent_state_manager.update_state("initializing")
+        await self._ensure_not_cancelled(cancel_event)
 
         target_dir = resolve_target_directory(path)
         change_dir_result = await Shell.change_directory(target_dir)
@@ -709,7 +833,7 @@ class CodeAgent:
         context = AgentContext(
             current_task=prompt,
             working_directory=Shell.current_directory,
-            max_iterations=self.config.max_iterations,
+            max_iterations=self.config.planning_max_iterations,
         )
         context.messages = [
             {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
@@ -722,13 +846,24 @@ class CodeAgent:
         ]
 
         plan = await self.generate_plan_of_action(
-            prompt, path, on_event=on_event, context=context
+            prompt,
+            path,
+            on_event=on_event,
+            context=context,
+            cancel_event=cancel_event,
         )
         context.plan = plan
         logger.debug(f"Plan generated: {context.plan}")
 
+        await self._ensure_not_cancelled(cancel_event)
+
         context.messages[0] = {"role": "system", "content": SYSTEM_PROMPT}
         context.iteration = 0
+        context.max_iterations = self.config.max_iterations
+        context.discovery_iterations = 0
+        context.recent_tool_signatures = []
+        reset_nudge_tracking(context)
+        context.messages = compact_messages(context.messages, keep_recent_tool_results=8)
         context.messages.append(
             {
                 "role": "user",
@@ -758,25 +893,38 @@ class CodeAgent:
             finish_tool="finish",
             on_event=on_event,
             on_finish=_on_finish,
-            stagnant_limit=5,
+            stagnant_limit=4,
+            cancel_event=cancel_event,
         )
 
     async def generate_code_stream(
-        self, prompt: str, path: str
+        self,
+        prompt: str,
+        path: str,
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        cancel_event = cancel_event or asyncio.Event()
 
         async def _on_event(event: dict[str, Any]) -> None:
             await queue.put(event)
 
-        task = asyncio.create_task(self.generate_code(prompt, path, on_event=_on_event))
+        task = asyncio.create_task(
+            self.generate_code(
+                prompt, path, on_event=_on_event, cancel_event=cancel_event
+            )
+        )
 
         while True:
+            if cancel_event.is_set() and not task.done():
+                task.cancel()
+
             if task.done() and queue.empty():
                 break
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=0.1)
-                yield event
+                if event is not None:
+                    yield event
             except TimeoutError:
                 continue
 
@@ -787,6 +935,18 @@ class CodeAgent:
                 "step": "completed",
                 "message": "Code generation completed.",
                 "summary": summary,
+            }
+        except asyncio.CancelledError:
+            yield {
+                "type": "status",
+                "step": "cancelled",
+                "message": "Run cancelled.",
+            }
+        except AgentCancelled:
+            yield {
+                "type": "status",
+                "step": "cancelled",
+                "message": "Run cancelled.",
             }
         except Exception as e:
             yield {

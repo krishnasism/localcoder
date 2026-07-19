@@ -12,7 +12,9 @@ Rules:
 - Never ask the user what to build or what they want. Plan from the provided task.
 - If the task is broad, pick a reasonable minimal scope and plan concrete file-level steps.
 - Never assume file contents — read relevant files with tools before planning edits.
-- Do not over-explore. Start planning as soon as you have enough context.
+- Do not over-explore. Read at most a few key files, then plan.
+- Never call list_files or get_directory_tree more than once — a project snapshot is already provided.
+- Never re-read the same file unless the first read failed.
 - Plan minimal, concrete edits (specific files and changes).
 - When the plan is ready, call `plan_finish` with a numbered step-by-step plan in the
   `summary` argument. Do not put the plan only in chat text.
@@ -20,8 +22,8 @@ Rules:
 
 Recommended workflow:
 
-1. Inspect project structure (already partially provided in the first message)
-2. Read only files relevant to the task
+1. Use the project snapshot already provided
+2. Read only files relevant to the task (usually 1–4 files)
 3. Write a numbered plan of concrete file changes
 4. Call `plan_finish` with that plan in `summary`
 """
@@ -36,15 +38,16 @@ Rules:
 - The approved plan and original task are your source of truth. Do not re-plan.
 - Execute the plan one edit at a time. Prefer `sed` for small changes, `write_file` for new files.
 - Before `sed`, ensure `old_string` matches the file exactly (whitespace, quotes, spelling).
-- If `sed` returns EDIT_FAILED, read the file and fix the match — do not guess.
+- If `sed` returns EDIT_FAILED, read the file once, then retry with an exact match — do not guess.
 - Do not call `list_files` or `get_directory_tree` unless the plan requires a new path you have not seen.
 - Do not repeat the same tool call. If you already have output, use it and move on.
+- Do not re-read a file you already read unless an edit just failed on that file.
 - For running tests, use the `pytest` tool — not `run_shell_command` with activate/pytest collect.
 - Test files are under `tests/` unless the plan says otherwise. Do not run `pytest --collect-only` in a loop.
 - Invoke tools through the tool-calling API. Never print tool JSON in chat text.
 - After each successful edit, move to the next plan step. Do not loop on reads or shell commands.
 - Verify changes with `read_file` or tests only when the plan says to.
-- Call `finish` only after every planned change is complete.
+- Call `finish` as soon as every planned change is complete. Prefer finishing over extra exploration.
 - Current Operating System: {current_os}
 
 Recommended workflow:
