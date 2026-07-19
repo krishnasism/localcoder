@@ -469,9 +469,7 @@ class TestShellNonFileOperations:
         td, original_dir = self._chdir_to_temp()
         try:
             asyncio.run(Shell.write_file("app.txt", "one\ntwo\nthree\n"))
-            result = asyncio.run(
-                Shell.insert_after("app.txt", "two\n", "INSERTED")
-            )
+            result = asyncio.run(Shell.insert_after("app.txt", "two\n", "INSERTED"))
             assert result.startswith("SUCCESS")
             content = asyncio.run(Shell.read_file("app.txt"))
             assert content == "one\ntwo\nINSERTED\nthree\n"

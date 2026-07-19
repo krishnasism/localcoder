@@ -24,9 +24,7 @@ def main() -> int:
     try:
         import PyInstaller  # noqa: F401
     except ImportError:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "pyinstaller"]
-        )
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
 
     if DIST_DIR.exists():
         shutil.rmtree(DIST_DIR)

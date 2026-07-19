@@ -22,7 +22,9 @@ def test_classify_hard_refactor():
 
 
 def test_classify_hard_implement_feature():
-    prompt = "Implement a new feature for project-wide semantic search across the codebase"
+    prompt = (
+        "Implement a new feature for project-wide semantic search across the codebase"
+    )
     assert classify_prompt(prompt) == "hard"
 
 

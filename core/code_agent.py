@@ -18,7 +18,6 @@ from core.agent.utils import (
     MAX_IDENTICAL_TOOL_REPEATS,
     MAX_PLANNING_FILE_READS,
     MAX_SAME_FILE_READS,
-    PLANNING_CLARIFICATION_NUDGE,
     PLANNING_NO_PLAN_NUDGE,
     PLANNING_REJECTION_MESSAGE,
     PLANNING_SNAPSHOT_CHARS,
@@ -225,7 +224,9 @@ class CodeAgent:
         initial_tree = truncate_for_context(tree_raw, PLANNING_SNAPSHOT_CHARS)
         return change_dir_result, initial_files, initial_tree
 
-    async def __call_llm(self, context: AgentContext, tools: list, step: str = "editing"):
+    async def __call_llm(
+        self, context: AgentContext, tools: list, step: str = "editing"
+    ):
         model = self._model_for_step(step)
         logging.info(f"Model: {model}, Tools: {len(tools)}, step={step}")
         return await self.client.chat.completions.create(
@@ -301,7 +302,9 @@ class CodeAgent:
             context.messages, context.current_task
         )
         if recovered:
-            logger.info("Recovered actionable plan from history instead of generic fallback.")
+            logger.info(
+                "Recovered actionable plan from history instead of generic fallback."
+            )
             return recovered
         return self._fallback_plan(context.current_task)
 
@@ -1017,9 +1020,11 @@ class CodeAgent:
                 {"type": "status", "step": "planning", "message": "Planning started."},
             )
 
-            change_dir_result, initial_files, initial_tree = (
-                await self._prepare_workspace_snapshot(path, on_event=on_event)
-            )
+            (
+                change_dir_result,
+                initial_files,
+                initial_tree,
+            ) = await self._prepare_workspace_snapshot(path, on_event=on_event)
 
             context = AgentContext(
                 current_task=prompt,
@@ -1079,9 +1084,11 @@ class CodeAgent:
         self.agent_state_manager.update_state("initializing")
         await self._ensure_not_cancelled(cancel_event)
 
-        change_dir_result, initial_files, initial_tree = (
-            await self._prepare_workspace_snapshot(path, on_event=on_event)
-        )
+        (
+            change_dir_result,
+            initial_files,
+            initial_tree,
+        ) = await self._prepare_workspace_snapshot(path, on_event=on_event)
 
         context = AgentContext(
             current_task=prompt,
@@ -1195,7 +1202,9 @@ class CodeAgent:
             finish_tool="finish",
             on_event=on_event,
             on_finish=_on_finish,
-            stagnant_limit=2 if complexity == "trivial" else (3 if complexity == "medium" else 4),
+            stagnant_limit=2
+            if complexity == "trivial"
+            else (3 if complexity == "medium" else 4),
             cancel_event=cancel_event,
         )
         await self._emit(

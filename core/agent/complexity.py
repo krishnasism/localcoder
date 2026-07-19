@@ -74,7 +74,9 @@ def synthetic_plan_for_prompt(prompt: str) -> str:
     """Build a short execution plan when planning is skipped."""
     text = " ".join((prompt or "").strip().split())
     if not text:
-        return "1. Inspect the mentioned files\n2. Apply the requested change\n3. Finish"
+        return (
+            "1. Inspect the mentioned files\n2. Apply the requested change\n3. Finish"
+        )
     files = [m.group("path") for m in _FILE_PATH_RE.finditer(prompt or "")]
     # Deduplicate while preserving order.
     seen: set[str] = set()

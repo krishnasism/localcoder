@@ -313,9 +313,7 @@ class Shell:
             return f"Error listing files: {str(e)}"
 
     @staticmethod
-    async def get_directory_tree(
-        path: str | None = None, max_depth: int = 3
-    ) -> str:
+    async def get_directory_tree(path: str | None = None, max_depth: int = 3) -> str:
         try:
             base_dir = Shell._resolve_directory(path)
             skip_names = Shell._walk_skip_names()
@@ -333,9 +331,15 @@ class Shell:
                     if level > max_depth:
                         dirs[:] = []
                         continue
-                    dirs[:] = [d for d in dirs if d not in skip_names and not d.startswith(".")]
+                    dirs[:] = [
+                        d for d in dirs if d not in skip_names and not d.startswith(".")
+                    ]
                     indent = " " * 4 * level
-                    label = os.path.basename(root) if rel != "." else os.path.basename(base_dir)
+                    label = (
+                        os.path.basename(root)
+                        if rel != "."
+                        else os.path.basename(base_dir)
+                    )
                     tree.append(f"{indent}{label}{os.path.sep}")
                     subindent = " " * 4 * (level + 1)
                     for f in files[:40]:
@@ -394,7 +398,9 @@ class Shell:
             file_path = Shell._resolve_path(filename)
 
             def _sed() -> str:
-                with open(file_path, "r", encoding="utf-8", errors="replace", newline="") as file:
+                with open(
+                    file_path, "r", encoding="utf-8", errors="replace", newline=""
+                ) as file:
                     content = file.read()
 
                 newline = Shell._detect_newline(content)
@@ -532,9 +538,7 @@ class Shell:
                         line_end = line_start + len(lines[line - 1])
                         on_line = [m for m in matches if line_start <= m < line_end]
                         if not on_line:
-                            return (
-                                f"EDIT_FAILED: marker not found on line {line} of {file_path}."
-                            )
+                            return f"EDIT_FAILED: marker not found on line {line} of {file_path}."
                         idx = on_line[0]
                     else:
                         return (
