@@ -26,6 +26,20 @@ def test_looks_like_clarification_request():
     assert not looks_like_clarification_request("1. Edit api.py\n2. Run tests")
 
 
+def test_looks_like_missing_task_claim():
+    from core.agent.utils import looks_like_missing_task_claim, task_reminder_message
+
+    text = (
+        "However, I notice no specific task or feature request was provided "
+        "in the user messages."
+    )
+    assert looks_like_missing_task_claim(text)
+    assert looks_like_clarification_request(text)
+    reminder = task_reminder_message("Add dark mode", phase="planning")
+    assert "Add dark mode" in reminder
+    assert "missing" in reminder.lower()
+
+
 def test_is_actionable_plan_rejects_questions():
     question = "Looking at your project, could you clarify what task you want me to do?"
     assert not is_actionable_plan(question)

@@ -2,7 +2,10 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from core.agent.config import load_agent_config
 from core.agent.models import AgentContext, FinishResult
-from core.agent.prompts import PLANNING_SYSTEM_PROMPT, SYSTEM_PROMPT
+from core.agent.prompts import (
+    build_editing_system_prompt,
+    build_planning_system_prompt,
+)
 from core.agent.toolsets import build_tool_registry
 from core.agent.utils import (
     DISCOVERY_LOOP_NUDGE,
@@ -28,11 +31,13 @@ from core.agent.utils import (
     is_edit_failure,
     is_tool_error,
     looks_like_clarification_request,
+    looks_like_missing_task_claim,
     looks_like_plan,
     materialize_tool_calls,
     reset_nudge_tracking,
     resolve_target_directory,
     should_skip_assistant_message,
+    task_reminder_message,
     tool_call_signature,
     truncate_for_context,
 )
@@ -352,15 +357,38 @@ class CodeAgent:
         initial_files: str,
         initial_tree: str,
     ) -> str:
+        # Put the task at both ends — local models attend best to edges of long context.
         return (
-            f"User task (complete — do not ask for clarification):\n{prompt}\n\n"
+            "========== USER TASK (COMPLETE — DO NOT ASK FOR CLARIFICATION) ==========\n"
+            f"{prompt}\n"
+            "========== END USER TASK ==========\n\n"
             f"Target file or folder: {path}\n"
             f"Directory setup: {change_dir_result}\n"
             f"Current working directory: {Shell.current_directory}\n\n"
-            "Initial project snapshot (already gathered; do not call list_files/get_directory_tree again):\n"
+            "Initial project snapshot (already gathered; do not call "
+            "list_files/get_directory_tree again):\n"
             f"Files:\n{initial_files}\n\n"
-            f"Tree:\n{initial_tree}"
+            f"Tree:\n{initial_tree}\n\n"
+            "========== USER TASK REMINDER ==========\n"
+            f"{prompt}\n"
+            "Plan concrete file-level changes for THIS task, then call plan_finish."
         )
+
+    def _refresh_system_prompt(self, context: AgentContext, step: str) -> None:
+        if not context.messages or context.messages[0].get("role") != "system":
+            return
+        if step == "planning":
+            context.messages[0] = {
+                "role": "system",
+                "content": build_planning_system_prompt(context.current_task),
+            }
+        elif step == "editing":
+            context.messages[0] = {
+                "role": "system",
+                "content": build_editing_system_prompt(
+                    context.current_task, context.plan or "(no plan yet)"
+                ),
+            }
 
     async def _run_agent_loop(
         self,
@@ -391,6 +419,21 @@ class CodeAgent:
 
             if context.iteration % 3 == 0:
                 context.messages = compact_messages(context.messages)
+
+            # Keep the authoritative task visible in the system prompt every turn.
+            self._refresh_system_prompt(context, step)
+
+            # Re-anchor the task periodically so long tool histories don't bury it.
+            if context.iteration > 1 and context.iteration % 4 == 0:
+                context.messages.append(
+                    {
+                        "role": "user",
+                        "content": task_reminder_message(
+                            context.current_task, phase=step
+                        ),
+                    }
+                )
+                reset_nudge_tracking(context)
 
             await self._emit(
                 on_event,
@@ -454,11 +497,15 @@ class CodeAgent:
                             }
                         )
                         stagnant_iterations += 1
-                        if looks_like_clarification_request(summary):
+                        if looks_like_clarification_request(
+                            summary
+                        ) or looks_like_missing_task_claim(summary):
                             append_nudge(
                                 context,
                                 "planning_clarification",
-                                PLANNING_CLARIFICATION_NUDGE,
+                                task_reminder_message(
+                                    context.current_task, phase="planning"
+                                ),
                             )
                         continue
 
@@ -579,11 +626,13 @@ class CodeAgent:
                     )
 
             if step == "planning" and message.content and not resolved_tool_calls:
-                if looks_like_clarification_request(message.content):
+                if looks_like_clarification_request(
+                    message.content
+                ) or looks_like_missing_task_claim(message.content):
                     append_nudge(
                         context,
                         "planning_clarification",
-                        PLANNING_CLARIFICATION_NUDGE,
+                        task_reminder_message(context.current_task, phase="planning"),
                     )
                     stagnant_iterations += 2
                 elif not is_actionable_plan(message.content):
@@ -593,6 +642,21 @@ class CodeAgent:
                     await self.plan_finish(summary=message.content)
                     await self._emit_plan(on_event, message.content)
                     return message.content
+
+            if (
+                step == "editing"
+                and message.content
+                and (
+                    looks_like_clarification_request(message.content)
+                    or looks_like_missing_task_claim(message.content)
+                )
+            ):
+                append_nudge(
+                    context,
+                    "editing_clarification",
+                    task_reminder_message(context.current_task, phase="editing"),
+                )
+                stagnant_iterations += 1
 
             if iteration_had_progress:
                 stagnant_iterations = 0
@@ -784,7 +848,7 @@ class CodeAgent:
                 max_iterations=self.config.planning_max_iterations,
             )
             context.messages = [
-                {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
+                {"role": "system", "content": build_planning_system_prompt(prompt)},
                 {
                     "role": "user",
                     "content": self._build_initial_user_message(
@@ -838,7 +902,7 @@ class CodeAgent:
             max_iterations=self.config.planning_max_iterations,
         )
         context.messages = [
-            {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
+            {"role": "system", "content": build_planning_system_prompt(prompt)},
             {
                 "role": "user",
                 "content": self._build_initial_user_message(
@@ -859,7 +923,10 @@ class CodeAgent:
 
         await self._ensure_not_cancelled(cancel_event)
 
-        context.messages[0] = {"role": "system", "content": SYSTEM_PROMPT}
+        context.messages[0] = {
+            "role": "system",
+            "content": build_editing_system_prompt(prompt, context.plan),
+        }
         context.iteration = 0
         context.max_iterations = self.config.max_iterations
         context.discovery_iterations = 0
@@ -873,10 +940,11 @@ class CodeAgent:
                 "role": "user",
                 "content": (
                     "Planning is complete. Switch to execution mode.\n\n"
-                    "Original task:\n"
-                    f"{prompt}\n\n"
-                    "Approved plan:\n"
-                    f"{context.plan}\n\n"
+                    "========== USER TASK ==========\n"
+                    f"{prompt}\n"
+                    "========== APPROVED PLAN ==========\n"
+                    f"{context.plan}\n"
+                    "========== END ==========\n\n"
                     "Execute this plan now. Your prior file reads in this conversation "
                     "are still valid — do not restart discovery. "
                     "Make concrete edits one step at a time and call finish when done."

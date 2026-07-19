@@ -120,10 +120,68 @@ def looks_like_clarification_request(text: str) -> bool:
         "unclear what",
         "do you want me to",
         "which feature",
+        "no specific task",
+        "no concrete",
+        "without a concrete",
+        "task or feature request was provided",
+        "was not provided",
+        "wasn't provided",
+        "have not been provided",
+        "hasn't been provided",
+        "if you have a specific",
+        "please provide a",
+        "cannot produce meaningful",
+        "i cannot produce",
+        "waiting for",
+        "need a specific feature",
+        "implicit exploration",
+        "only an implicit",
     )
     if any(marker in lowered for marker in markers):
         return True
     return text.count("?") >= 2
+
+
+def looks_like_missing_task_claim(text: str) -> bool:
+    """Model falsely claims the user never gave a task."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "no specific task",
+            "no concrete requirement",
+            "without a concrete requirement",
+            "task or feature request was provided",
+            "was not provided",
+            "wasn't provided",
+            "have not been provided",
+            "hasn't been provided",
+            "only an implicit exploration",
+            "cannot produce meaningful",
+            "if you have a specific feature",
+            "please clarify and i'll",
+            "please clarify and i will",
+        )
+    )
+
+
+def task_reminder_message(task: str, phase: str = "planning") -> str:
+    if phase == "editing":
+        return (
+            "REMINDER — the user task is still active and complete:\n"
+            f"{task}\n\n"
+            "Do not ask for clarification. Continue executing the approved plan "
+            "for this task, then call finish when done."
+        )
+    return (
+        "REMINDER — the user task is still active and complete:\n"
+        f"{task}\n\n"
+        "Do not say the task is missing. Do not ask clarifying questions. "
+        "Write a numbered plan of concrete file changes for THIS task and call "
+        "plan_finish with that plan in `summary`."
+    )
 
 
 def looks_like_plan(text: str) -> bool:
@@ -173,19 +231,21 @@ def is_actionable_plan(text: str) -> bool:
 
 PLANNING_REJECTION_MESSAGE = (
     "plan_finish rejected: `summary` must be a numbered, actionable plan with concrete "
-    "file-level steps — not clarifying questions. The user's task is already in the first "
-    "message. Read relevant files if needed, then call plan_finish again."
+    "file-level steps — not clarifying questions. The user's task is already in the system "
+    "prompt and first user message. Read relevant files if needed, then call plan_finish again."
 )
 
 PLANNING_CLARIFICATION_NUDGE = (
-    "Do not ask clarifying questions. The user's task is already in the first message. "
+    "Do not ask clarifying questions and do not claim the task is missing. "
+    "The user's task is already in the system prompt and the first user message. "
     "Make reasonable assumptions, write a numbered plan of concrete file changes, and "
     "call plan_finish with that plan in the `summary` parameter."
 )
 
 PLANNING_NO_PLAN_NUDGE = (
-    "Respond with a numbered plan of concrete file changes, then call plan_finish with "
-    "that plan in the `summary` parameter. Do not reply with analysis only."
+    "Respond with a numbered plan of concrete file changes for the user task in the "
+    "system prompt, then call plan_finish with that plan in the `summary` parameter. "
+    "Do not reply with analysis only."
 )
 
 REPEATED_TOOL_NUDGE = (
