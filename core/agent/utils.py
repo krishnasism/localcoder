@@ -40,7 +40,9 @@ def truncate_for_context(text: str, max_chars: int = 12000) -> str:
 
 EDIT_TOOLS = frozenset(
     {
+        "apply_patch",
         "search_replace",
+        "replace_lines",
         "sed",
         "insert_after",
         "write_file",
@@ -254,7 +256,8 @@ PLANNING_NO_PLAN_NUDGE = (
 
 REPEATED_TOOL_NUDGE = (
     "You already ran this exact tool call. Do not repeat it. Use the previous result "
-    "in context, make a concrete file edit with sed/write_file, or call finish."
+    "in context, make a concrete file edit with apply_patch/search_replace/replace_lines, "
+    "or call finish."
 )
 
 EMBEDDED_TOOL_NUDGE = "Do not print tool JSON in chat text. Invoke tools through the tool-calling API only."
@@ -267,8 +270,14 @@ DISCOVERY_LOOP_NUDGE = (
 
 READ_LIMIT_NUDGE = (
     "You have already read this file enough times. Do not read it again. "
-    "Either edit it with sed/write_file using the content you already have, "
+    "Either edit it with apply_patch/replace_lines using the content you already have, "
     "or move to the next plan step / call finish."
+)
+
+EDIT_FAILED_NUDGE = (
+    "Edit failed. Re-read the file (optionally with start_line/end_line), copy exact text, "
+    "then retry with `apply_patch` (preferred) or `replace_lines`. "
+    "Do not repeat the identical failed arguments."
 )
 
 

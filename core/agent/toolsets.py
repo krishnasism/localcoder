@@ -23,9 +23,9 @@ class AgentToolRegistry:
 _LEAN_EDITING_ALLOW = frozenset(
     {
         "read_file",
+        "apply_patch",
         "search_replace",
-        "sed",
-        "insert_after",
+        "replace_lines",
         "write_file",
         "finish",
     }

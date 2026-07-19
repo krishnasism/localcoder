@@ -13,6 +13,7 @@ from core.agent.toolsets import build_tool_registry
 from core.agent.utils import (
     DISCOVERY_LOOP_NUDGE,
     DISCOVERY_TOOLS,
+    EDIT_FAILED_NUDGE,
     EDIT_TOOLS,
     EMBEDDED_TOOL_NUDGE,
     MAX_IDENTICAL_TOOL_REPEATS,
@@ -711,6 +712,8 @@ class CodeAgent:
                                     "command",
                                     "pattern",
                                     "marker",
+                                    "start_line",
+                                    "end_line",
                                 )
                             },
                         },
@@ -734,6 +737,10 @@ class CodeAgent:
                         iteration_had_edit = True
                         if is_edit_failure(result_text) or is_tool_error(result_text):
                             iteration_had_edit_failure = True
+                            if is_edit_failure(result_text):
+                                append_nudge(
+                                    context, "edit_failed", EDIT_FAILED_NUDGE
+                                )
                     await self._emit(
                         on_event,
                         {

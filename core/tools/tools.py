@@ -11,7 +11,9 @@ READ_ONLY_TOOL_REGISTRATIONS: dict[str, callable] = {
     "setup_python_virtual_env": PythonTools().setup_python_virtual_env,
 }
 TOOL_REGISTRATIONS: dict[str, callable] = {
+    "apply_patch": Shell.apply_patch,
     "search_replace": Shell.search_replace,
+    "replace_lines": Shell.replace_lines,
     "sed": Shell.sed,
     "insert_after": Shell.insert_after,
     "write_file": Shell.write_file,
@@ -97,7 +99,8 @@ FS_READ_ONLY_TOOLS = [
             "name": "read_file",
             "description": (
                 "Read the contents of a file relative to the current working directory. "
-                "Accepts OS-native or forward-slash paths (e.g. src/app.py or src\\app.py)."
+                "Accepts OS-native or forward-slash paths (e.g. src/app.py or src\\app.py). "
+                "Optionally pass start_line/end_line (1-based inclusive) for a window."
             ),
             "parameters": {
                 "type": "object",
@@ -107,7 +110,22 @@ FS_READ_ONLY_TOOLS = [
                         "description": (
                             "Relative or absolute file path. Forward or backslash separators are fine."
                         ),
-                    }
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Optional 1-based start line for a partial read.",
+                        "minimum": 1,
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Optional 1-based end line for a partial read.",
+                        "minimum": 1,
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Optional: return only this 1-based line.",
+                        "minimum": 1,
+                    },
                 },
                 "required": ["filename"],
             },
@@ -173,12 +191,52 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
     {
         "type": "function",
         "function": {
+            "name": "apply_patch",
+            "description": (
+                "Preferred edit tool. Apply a simplified unified / Codex-style patch. "
+                "One call may update multiple files and include multiple @@ hunks. "
+                "Use *** Update File: path and *** Add File: path headers, or pass "
+                "filename= with a bare hunk body for a single file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "description": (
+                            "Patch text, e.g.\n"
+                            "*** Begin Patch\n"
+                            "*** Update File: src/App.tsx\n"
+                            "@@\n context\n-old\n+new\n"
+                            "*** Add File: src/new.ts\n"
+                            "+line\n"
+                            "*** End Patch"
+                        ),
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": (
+                            "Optional single-file target when patch body has no "
+                            "*** Update/Add File headers."
+                        ),
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, validate only and do not write files.",
+                    },
+                },
+                "required": ["patch"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_replace",
             "description": (
-                "Preferred edit tool. Replace exactly ONE occurrence of old_string "
-                "with new_string in a file. Include enough surrounding context so the "
-                "match is unique. One change location per call — for two edits, call "
-                "search_replace twice."
+                "Secondary edit tool for a single unique string swap. "
+                "Tolerates minor whitespace drift. For multiple locations, prefer apply_patch. "
+                "Set replace_all=true only when every occurrence should change."
             ),
             "parameters": {
                 "type": "object",
@@ -189,7 +247,7 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
                     },
                     "old_string": {
                         "type": "string",
-                        "description": "Exact text to find (must be unique in the file).",
+                        "description": "Text to find (unique unless replace_all).",
                     },
                     "new_string": {
                         "type": "string",
@@ -200,6 +258,10 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
                         "description": "Optional 1-based line to disambiguate matches.",
                         "minimum": 1,
                     },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "If true, replace every occurrence.",
+                    },
                 },
                 "required": ["filename", "old_string", "new_string"],
             },
@@ -208,41 +270,34 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
     {
         "type": "function",
         "function": {
-            "name": "sed",
+            "name": "replace_lines",
             "description": (
-                "Alias of search_replace — prefer search_replace. "
-                "Replace exactly ONE occurrence of old_string in a file. "
-                "One change location per call — for two different inserts/edits, call "
-                "search_replace (or insert_after) twice. "
-                "To add lines after existing text, prefer insert_after, or set new_string to "
-                "old_string plus the new lines. "
-                "old_string must match uniquely; if ambiguous, pass `line` (1-based)."
+                "Replace an inclusive 1-based line range with new_content. "
+                "Use after reading the file when you know exact line numbers."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "description": "The name of the file to modify.",
+                        "description": "File to modify.",
                     },
-                    "old_string": {
-                        "type": "string",
-                        "description": "The exact text to replace (unique in the file).",
-                    },
-                    "new_string": {
-                        "type": "string",
-                        "description": (
-                            "Replacement text. To insert lines after a marker, include the "
-                            "marker plus the new lines in new_string."
-                        ),
-                    },
-                    "line": {
+                    "start_line": {
                         "type": "integer",
-                        "description": "Optional 1-based line to disambiguate matches.",
+                        "description": "First line to replace (1-based).",
                         "minimum": 1,
                     },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Last line to replace (1-based, inclusive).",
+                        "minimum": 1,
+                    },
+                    "new_content": {
+                        "type": "string",
+                        "description": "Replacement text for that range (may be multiple lines).",
+                    },
                 },
-                "required": ["filename", "old_string", "new_string"],
+                "required": ["filename", "start_line", "end_line", "new_content"],
             },
         },
     },
@@ -253,7 +308,7 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
             "description": (
                 "Insert new content immediately after a unique marker string in a file. "
                 "Best for adding one or more new lines. "
-                "For two different insert locations, call insert_after twice."
+                "For two different insert locations, prefer apply_patch or call insert_after twice."
             ),
             "parameters": {
                 "type": "object",

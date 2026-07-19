@@ -373,7 +373,12 @@ class Shell:
         return text.replace("\n", newline)
 
     @staticmethod
-    async def read_file(filename: str, line: int = None) -> str:
+    async def read_file(
+        filename: str,
+        line: int = None,
+        start_line: int = None,
+        end_line: int = None,
+    ) -> str:
         try:
             file_path = Shell._resolve_path(filename)
 
@@ -384,7 +389,21 @@ class Shell:
                         if 0 <= line - 1 < len(lines):
                             return lines[line - 1]
                         return ""
-                    return file.read()
+                    content = file.read()
+                    if start_line is None and end_line is None:
+                        return content
+                    lines = content.splitlines(keepends=True)
+                    n = len(lines)
+                    start = 1 if start_line is None else start_line
+                    end = n if end_line is None else end_line
+                    if start < 1 or end < start or start > n:
+                        return (
+                            f"Error reading file: invalid range {start}-{end} "
+                            f"(file has {n} lines)."
+                        )
+                    end = min(end, n)
+                    chunk = "".join(lines[start - 1 : end])
+                    return f"# lines {start}-{end} of {n}\n{chunk}"
 
             return await asyncio.to_thread(_read)
         except Exception as e:
@@ -392,12 +411,35 @@ class Shell:
 
     @staticmethod
     async def sed(
-        filename: str, old_string: str, new_string: str, line: int = None
+        filename: str,
+        old_string: str,
+        new_string: str,
+        line: int = None,
+        replace_all: bool = False,
     ) -> str:
+        return await Shell.search_replace(
+            filename=filename,
+            old_string=old_string,
+            new_string=new_string,
+            line=line,
+            replace_all=replace_all,
+        )
+
+    @staticmethod
+    async def search_replace(
+        filename: str,
+        old_string: str,
+        new_string: str,
+        line: int = None,
+        replace_all: bool = False,
+    ) -> str:
+        """Replace text with exact then whitespace-relaxed matching."""
         try:
+            from core.tools.patch import apply_string_replace
+
             file_path = Shell._resolve_path(filename)
 
-            def _sed() -> str:
+            def _replace() -> str:
                 with open(
                     file_path, "r", encoding="utf-8", errors="replace", newline=""
                 ) as file:
@@ -405,70 +447,134 @@ class Shell:
 
                 newline = Shell._detect_newline(content)
                 content_lf = Shell._to_lf(content)
-                old_lf = Shell._to_lf(old_string)
-                new_lf = Shell._to_lf(new_string)
-
-                if not old_lf:
-                    return "EDIT_FAILED: old_string is empty."
-
-                if line is not None:
-                    lines = content_lf.splitlines(keepends=True)
-                    if not (0 <= line - 1 < len(lines)):
-                        return (
-                            f"EDIT_FAILED: line {line} is out of range in {file_path} "
-                            f"(file has {len(lines)} lines). Read the file first."
-                        )
-                    line_text = lines[line - 1]
-                    if old_lf not in Shell._to_lf(line_text):
-                        return (
-                            f"EDIT_FAILED: old_string not found on line {line} of {file_path}. "
-                            f"Read the file and copy the exact text from that line."
-                        )
-                    lines[line - 1] = line_text.replace(old_lf, new_lf, 1)
-                    updated_lf = "".join(lines)
-                    replacements = 1
-                else:
-                    occurrences = content_lf.count(old_lf)
-                    if occurrences == 0:
-                        return (
-                            f"EDIT_FAILED: old_string not found in {file_path}. "
-                            "Read the file and copy the exact text to replace. "
-                            "Tip: include surrounding lines for uniqueness, and use one "
-                            "sed call per change location."
-                        )
-                    if occurrences > 1:
-                        return (
-                            f"EDIT_FAILED: old_string appears {occurrences} times in {file_path}. "
-                            "Use the `line` parameter or include more surrounding context "
-                            "so old_string matches exactly once. "
-                            "For two separate inserts, call sed/insert_after twice."
-                        )
-                    updated_lf = content_lf.replace(old_lf, new_lf, 1)
-                    replacements = 1
-
-                updated = Shell._from_lf(updated_lf, newline)
-                with open(file_path, "w", encoding="utf-8", newline="") as file:
-                    file.write(updated)
-                return (
-                    f"SUCCESS: replaced {replacements} occurrence(s) in {file_path}. "
-                    "Re-read the file to verify if needed."
+                updated, message = apply_string_replace(
+                    content_lf,
+                    old_string,
+                    new_string,
+                    line=line,
+                    replace_all=bool(replace_all),
                 )
+                if updated is None:
+                    return message
+                with open(file_path, "w", encoding="utf-8", newline="") as file:
+                    file.write(Shell._from_lf(updated, newline))
+                return f"{message} File: {file_path}"
 
-            return await asyncio.to_thread(_sed)
+            return await asyncio.to_thread(_replace)
         except Exception as e:
-            return f"Error performing sed operation: {str(e)}"
+            return f"Error performing search_replace: {str(e)}"
 
     @staticmethod
-    async def search_replace(
-        filename: str, old_string: str, new_string: str, line: int = None
+    async def apply_patch(
+        patch: str,
+        filename: str | None = None,
+        dry_run: bool = False,
     ) -> str:
-        """Preferred patch-style edit: replace one unique occurrence of old_string."""
-        return await Shell.sed(
-            filename=filename,
-            old_string=old_string,
-            new_string=new_string,
-            line=line,
-        )
+        """
+        Apply a simplified unified diff.
+
+        Prefer Codex-style multi-file patches:
+          *** Begin Patch
+          *** Update File: path/a.py
+          @@
+           context
+          -old
+          +new
+          *** Add File: path/b.py
+          +line
+          *** End Patch
+
+        Or pass filename= plus a bare hunk body for a single-file patch.
+        """
+        try:
+            from core.tools.patch import plan_filesystem_changes
+
+            def _apply() -> str:
+                def _read_lf(path: str) -> str:
+                    resolved = Shell._resolve_path(path)
+                    if not os.path.isfile(resolved):
+                        raise FileNotFoundError(resolved)
+                    with open(
+                        resolved, "r", encoding="utf-8", errors="replace", newline=""
+                    ) as file:
+                        return Shell._to_lf(file.read())
+
+                changes, message = plan_filesystem_changes(
+                    patch or "",
+                    default_filename=filename,
+                    read_file_lf=_read_lf,
+                )
+                if not changes:
+                    return message
+                if dry_run:
+                    files = ", ".join(f"{action}:{path}" for path, action, _ in changes)
+                    return f"{message} (dry_run; no writes). Files: {files}"
+
+                # Transactional write: all-or-nothing after successful planning.
+                written: list[str] = []
+                try:
+                    for path, action, content_lf in changes:
+                        resolved = Shell._resolve_path(path)
+                        parent = os.path.dirname(resolved)
+                        if parent:
+                            os.makedirs(parent, exist_ok=True)
+                        existing = ""
+                        newline = "\n"
+                        if action == "update" and os.path.isfile(resolved):
+                            with open(
+                                resolved,
+                                "r",
+                                encoding="utf-8",
+                                errors="replace",
+                                newline="",
+                            ) as file:
+                                existing = file.read()
+                            newline = Shell._detect_newline(existing)
+                        with open(
+                            resolved, "w", encoding="utf-8", newline=""
+                        ) as file:
+                            file.write(Shell._from_lf(content_lf, newline))
+                        written.append(resolved)
+                except Exception as write_err:
+                    return (
+                        f"EDIT_FAILED: write error after validation: {write_err}. "
+                        f"Partial writes may have occurred: {written}"
+                    )
+                return f"{message} Wrote: {', '.join(written)}"
+
+            return await asyncio.to_thread(_apply)
+        except Exception as e:
+            return f"Error applying patch: {str(e)}"
+
+    @staticmethod
+    async def replace_lines(
+        filename: str, start_line: int, end_line: int, new_content: str
+    ) -> str:
+        """Replace an inclusive 1-based line range with new_content."""
+        try:
+            from core.tools.patch import replace_line_range
+
+            file_path = Shell._resolve_path(filename)
+
+            def _replace() -> str:
+                with open(
+                    file_path, "r", encoding="utf-8", errors="replace", newline=""
+                ) as file:
+                    content = file.read()
+                newline = Shell._detect_newline(content)
+                content_lf = Shell._to_lf(content)
+                updated, message = replace_line_range(
+                    content_lf, int(start_line), int(end_line), new_content or ""
+                )
+                if updated is None:
+                    return message
+                with open(file_path, "w", encoding="utf-8", newline="") as file:
+                    file.write(Shell._from_lf(updated, newline))
+                return f"{message} File: {file_path}"
+
+            return await asyncio.to_thread(_replace)
+        except Exception as e:
+            return f"Error replacing lines: {str(e)}"
 
     @staticmethod
     async def insert_after(
