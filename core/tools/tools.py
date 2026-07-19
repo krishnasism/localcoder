@@ -235,7 +235,11 @@ FS_TOOLS = FS_READ_ONLY_TOOLS + [
                     },
                     "line": {
                         "type": "integer",
-                        "description": "Optional 1-based line number to insert after.",
+                        "description": (
+                            "Optional 1-based line that CONTAINS the marker, used only to "
+                            "disambiguate when the marker appears more than once. "
+                            "Do not pass the destination line of the new content."
+                        ),
                         "minimum": 1,
                     },
                 },

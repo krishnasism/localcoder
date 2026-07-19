@@ -418,6 +418,34 @@ class TestShellNonFileOperations:
         finally:
             self._restore(original_dir)
 
+    def test_insert_after_ignores_destination_line_hint(self):
+        """When marker is set, a wrong/extra line hint must not shift insert +1."""
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.write_file("app.txt", "one\ntwo\nthree\nfour\n"))
+            # Model often passes line=destination (3) instead of marker line (2).
+            result = asyncio.run(
+                Shell.insert_after("app.txt", "two", "INSERTED", line=3)
+            )
+            assert result.startswith("SUCCESS")
+            content = asyncio.run(Shell.read_file("app.txt"))
+            assert content == "one\ntwo\nINSERTED\nthree\nfour\n"
+        finally:
+            self._restore(original_dir)
+
+    def test_insert_after_strips_trailing_newline_on_marker(self):
+        td, original_dir = self._chdir_to_temp()
+        try:
+            asyncio.run(Shell.write_file("app.txt", "one\ntwo\nthree\n"))
+            result = asyncio.run(
+                Shell.insert_after("app.txt", "two\n", "INSERTED")
+            )
+            assert result.startswith("SUCCESS")
+            content = asyncio.run(Shell.read_file("app.txt"))
+            assert content == "one\ntwo\nINSERTED\nthree\n"
+        finally:
+            self._restore(original_dir)
+
     # -- error paths for existing methods --
 
     def test_write_file_error(self):

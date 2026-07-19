@@ -436,49 +436,89 @@ class Shell:
             file_path = Shell._resolve_path(filename)
 
             def _insert() -> str:
-                with open(file_path, "r", encoding="utf-8", errors="replace", newline="") as file:
+                with open(
+                    file_path, "r", encoding="utf-8", errors="replace", newline=""
+                ) as file:
                     original = file.read()
 
                 newline = Shell._detect_newline(original)
                 original_lf = Shell._to_lf(original)
-                marker_lf = Shell._to_lf(marker)
-                insert_lf = Shell._to_lf(content)
+                # Trailing newlines on the marker would shift the insert one line too far
+                # when combined with EOL handling / a line hint from the model.
+                marker_lf = Shell._to_lf(marker or "").rstrip("\n")
+                insert_lf = Shell._to_lf(content or "").rstrip("\n")
 
-                if not marker_lf:
-                    return "EDIT_FAILED: marker is empty."
+                if not insert_lf:
+                    return "EDIT_FAILED: content is empty."
 
-                if not insert_lf.endswith("\n"):
-                    insert_lf = insert_lf + "\n"
+                insert_lf = insert_lf + "\n"
 
-                if line is not None:
-                    lines = original_lf.splitlines(keepends=True)
-                    if not (0 <= line - 1 < len(lines)):
-                        return (
-                            f"EDIT_FAILED: line {line} is out of range in {file_path} "
-                            f"(file has {len(lines)} lines)."
-                        )
-                    # Insert after this 1-based line.
-                    lines.insert(line, insert_lf)
-                    updated_lf = "".join(lines)
-                else:
-                    occurrences = original_lf.count(marker_lf)
-                    if occurrences == 0:
+                def _insert_after_index(end: int) -> str:
+                    """Insert after the line that ends at/after end-of-marker position."""
+                    # If marker sits just before its line's newline, insert after that newline.
+                    if end < len(original_lf) and original_lf[end] == "\n":
+                        at = end + 1
+                        return original_lf[:at] + insert_lf + original_lf[at:]
+                    # Mid-line match: break onto the next line after the marker text.
+                    return original_lf[:end] + "\n" + insert_lf + original_lf[end:]
+
+                # Prefer marker when present — models often also pass `line` as the
+                # destination line number (off-by-one / too late).
+                if marker_lf:
+                    matches = []
+                    start = 0
+                    while True:
+                        idx = original_lf.find(marker_lf, start)
+                        if idx < 0:
+                            break
+                        matches.append(idx)
+                        start = idx + len(marker_lf)
+
+                    if not matches:
                         return (
                             f"EDIT_FAILED: marker not found in {file_path}. "
                             "Copy the exact text to insert after."
                         )
-                    if occurrences > 1:
+
+                    if len(matches) == 1:
+                        idx = matches[0]
+                    elif line is not None:
+                        # Disambiguate: pick the match that lies on this 1-based line.
+                        lines = original_lf.splitlines(keepends=True)
+                        if not (1 <= line <= len(lines)):
+                            return (
+                                f"EDIT_FAILED: line {line} is out of range in {file_path} "
+                                f"(file has {len(lines)} lines)."
+                            )
+                        # Character offset of the start of that line.
+                        line_start = sum(len(lines[i]) for i in range(line - 1))
+                        line_end = line_start + len(lines[line - 1])
+                        on_line = [m for m in matches if line_start <= m < line_end]
+                        if not on_line:
+                            return (
+                                f"EDIT_FAILED: marker not found on line {line} of {file_path}."
+                            )
+                        idx = on_line[0]
+                    else:
                         return (
-                            f"EDIT_FAILED: marker appears {occurrences} times in {file_path}. "
-                            "Pass `line` or include more surrounding context in marker. "
-                            "For two different inserts, call insert_after twice."
+                            f"EDIT_FAILED: marker appears {len(matches)} times in {file_path}. "
+                            "Pass `line` (1-based line containing the marker) or include more "
+                            "surrounding context. For two different inserts, call insert_after twice."
                         )
-                    idx = original_lf.find(marker_lf)
-                    end = idx + len(marker_lf)
-                    # Prefer inserting after the trailing newline of the matched line.
-                    if end < len(original_lf) and original_lf[end] == "\n":
-                        end += 1
-                    updated_lf = original_lf[:end] + insert_lf + original_lf[end:]
+
+                    updated_lf = _insert_after_index(idx + len(marker_lf))
+                elif line is not None:
+                    lines = original_lf.splitlines(keepends=True)
+                    if not (1 <= line <= len(lines)):
+                        return (
+                            f"EDIT_FAILED: line {line} is out of range in {file_path} "
+                            f"(file has {len(lines)} lines)."
+                        )
+                    # Insert immediately after this 1-based line (before the following line).
+                    lines.insert(line, insert_lf)
+                    updated_lf = "".join(lines)
+                else:
+                    return "EDIT_FAILED: provide a marker string (preferred) or a line number."
 
                 updated = Shell._from_lf(updated_lf, newline)
                 with open(file_path, "w", encoding="utf-8", newline="") as file:
