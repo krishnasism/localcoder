@@ -109,7 +109,11 @@ def parse_file_patches(patch: str) -> list[FilePatch]:
         nonlocal current_file, in_add
         _flush_hunk()
         if current_file is not None:
-            if current_file.action == "add" or current_file.hunks or current_file.add_lines:
+            if (
+                current_file.action == "add"
+                or current_file.hunks
+                or current_file.add_lines
+            ):
                 sections.append(current_file)
         current_file = None
         in_add = False
@@ -360,7 +364,12 @@ def apply_hunks_to_text(content_lf: str, hunks: list[Hunk]) -> tuple[str | None,
     result = "\n".join(file_lines)
     if ends_with_nl and (result and not result.endswith("\n")):
         result += "\n"
-    elif not ends_with_nl and result.endswith("\n") and content_lf and not content_lf.endswith("\n"):
+    elif (
+        not ends_with_nl
+        and result.endswith("\n")
+        and content_lf
+        and not content_lf.endswith("\n")
+    ):
         result = result[:-1]
 
     return (
@@ -432,7 +441,12 @@ def plan_filesystem_changes(
 
         updated, message = apply_hunks_to_text(original, section.hunks)
         if updated is None:
-            return [], f"EDIT_FAILED while updating {path}:\n{message}"
+            detail = (
+                message
+                if message.startswith("EDIT_FAILED:")
+                else f"EDIT_FAILED: {message}"
+            )
+            return [], f"{detail}\n(while updating {path}; no files written)"
         changes.append((path, "update", updated))
         summaries.append(f"update {path}: {message}")
 
@@ -505,11 +519,7 @@ def find_flexible_block(
         mode = "whitespace-relaxed"
 
     if line is not None:
-        matches = [
-            m
-            for m in matches
-            if m <= line - 1 < m + len(old_lines)
-        ]
+        matches = [m for m in matches if m <= line - 1 < m + len(old_lines)]
 
     return [(m, m + len(old_lines)) for m in matches], mode
 
@@ -553,7 +563,10 @@ def apply_string_replace(
             result = "\n".join(file_lines)
             if ends_with_nl:
                 result += "\n"
-            return result, "SUCCESS: replaced 1 occurrence(s) (whitespace-relaxed-line)."
+            return (
+                result,
+                "SUCCESS: replaced 1 occurrence(s) (whitespace-relaxed-line).",
+            )
         return (
             None,
             f"EDIT_FAILED: old_string not found on line {line}.\n"
@@ -564,7 +577,11 @@ def apply_string_replace(
     # Exact substring
     count = content_lf.count(old_lf)
     if count == 1 or (replace_all and count >= 1):
-        updated = content_lf.replace(old_lf, new_lf) if replace_all else content_lf.replace(old_lf, new_lf, 1)
+        updated = (
+            content_lf.replace(old_lf, new_lf)
+            if replace_all
+            else content_lf.replace(old_lf, new_lf, 1)
+        )
         n = count if replace_all else 1
         return updated, f"SUCCESS: replaced {n} occurrence(s) (exact)."
     if count > 1 and not replace_all:
@@ -598,7 +615,7 @@ def apply_string_replace(
         return (
             None,
             "EDIT_FAILED: old_string not found (exact and whitespace-relaxed).\n"
-            f"Looking for:\n"
+            "Looking for:\n"
             + "\n".join(f"  |{ln}" for ln in old_lf.splitlines()[:8])
             + f"\nNearby context:\n{_snippet(file_lines, hint_line)}\n"
             "Re-read the file, then retry with apply_patch or replace_lines.",

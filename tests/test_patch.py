@@ -167,6 +167,7 @@ class TestShellPatchWrappers:
             assert result.startswith("EDIT_FAILED:")
             after = asyncio.run(Shell.read_file("f.txt"))
             assert after == before
+            assert "B" not in after or after == before
         finally:
             self._restore(original)
 

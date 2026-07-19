@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentConfig:
     model: str = "qwen3-coder"
-    planning_model: str = "qwen3-coder"  # TODO: Need to research a nicer model for planning
+    planning_model: str = (
+        "qwen3-coder"  # TODO: Need to research a nicer model for planning
+    )
     editing_model: str = "qwen3-coder"
     openai_base_url: str = "http://localhost:11434/v1"
     openai_api_key: str = "local"

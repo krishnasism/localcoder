@@ -530,9 +530,7 @@ class Shell:
                             ) as file:
                                 existing = file.read()
                             newline = Shell._detect_newline(existing)
-                        with open(
-                            resolved, "w", encoding="utf-8", newline=""
-                        ) as file:
+                        with open(resolved, "w", encoding="utf-8", newline="") as file:
                             file.write(Shell._from_lf(content_lf, newline))
                         written.append(resolved)
                 except Exception as write_err:

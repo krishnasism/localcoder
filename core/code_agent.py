@@ -738,9 +738,7 @@ class CodeAgent:
                         if is_edit_failure(result_text) or is_tool_error(result_text):
                             iteration_had_edit_failure = True
                             if is_edit_failure(result_text):
-                                append_nudge(
-                                    context, "edit_failed", EDIT_FAILED_NUDGE
-                                )
+                                append_nudge(context, "edit_failed", EDIT_FAILED_NUDGE)
                     await self._emit(
                         on_event,
                         {

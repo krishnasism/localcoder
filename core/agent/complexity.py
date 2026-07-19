@@ -68,12 +68,7 @@ def classify_prompt(prompt: str) -> Complexity:
     if multi_file:
         return "hard"
 
-    if (
-        has_file
-        and trivial_signal
-        and len(text) < 280
-        and text.count("\n") < 6
-    ):
+    if has_file and trivial_signal and len(text) < 280 and text.count("\n") < 6:
         return "trivial"
 
     # Named single-file edits stay medium.
