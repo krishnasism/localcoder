@@ -31,7 +31,14 @@ _HARD_RE = re.compile(
     r"entire|whole\s+(app|project|codebase)|from\s+scratch|"
     r"end[- ]to[- ]end|implement\s+(a|an|the)\s+\w+|"
     r"new\s+feature|build\s+(a|an|the)|add\s+support\s+for|"
-    r"overhaul|restructure"
+    r"add\s+functionality|add\s+the\s+ability|introduce|"
+    r"overhaul|restructure|"
+    r"multi[- ]?(thread|session|chat|user|tenant)|"
+    r"concurrent|simultaneously|in\s+parallel|at\s+once|"
+    r"multiple\s+(chat\s+)?(threads?|sessions?|conversations?)|"
+    r"session\s+management|thread\s+management|"
+    r"full[- ]?stack|backend\s+and\s+(the\s+)?frontend|"
+    r"frontend\s+and\s+(the\s+)?backend"
     r")\b",
     re.IGNORECASE,
 )
@@ -51,20 +58,30 @@ def classify_prompt(prompt: str) -> Complexity:
     if _HARD_RE.search(text) or len(text) > 600 or text.count("\n") > 12:
         return "hard"
 
-    has_file = bool(_FILE_PATH_RE.search(text))
+    file_matches = list(_FILE_PATH_RE.finditer(text))
+    has_file = bool(file_matches)
+    file_count = len(file_matches)
     trivial_signal = bool(_TRIVIAL_RE.search(text))
-    multi_file = bool(_MULTI_FILE_HINT.search(text))
+    multi_file = bool(_MULTI_FILE_HINT.search(text)) or file_count >= 2
+
+    # Multi-file requests are never trivial/medium.
+    if multi_file:
+        return "hard"
 
     if (
         has_file
         and trivial_signal
-        and not multi_file
         and len(text) < 280
         and text.count("\n") < 6
     ):
         return "trivial"
 
-    if has_file or (trivial_signal and len(text) < 200) or len(text) < 160:
+    # Named single-file edits stay medium.
+    if has_file:
+        return "medium"
+
+    # No file path: open-ended product/feature work is hard unless it's a tiny wording tweak.
+    if trivial_signal and len(text) < 120:
         return "medium"
 
     return "hard"
