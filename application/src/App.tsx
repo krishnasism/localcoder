@@ -265,10 +265,10 @@ export default function App() {
   const [liveStatus, setLiveStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const themeIcon = theme === "dark" ? "☀️" : "🌙";
-  const toggleTheme = () =>
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const stored = window.localStorage.getItem("localcoder.theme");
+    return stored === "light" || stored === "dark" ? stored : "dark";
+  });
   const feedRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -284,6 +284,11 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("localcoder.model", model);
   }, [model]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    window.localStorage.setItem("localcoder.theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     const container = feedRef.current;
@@ -535,6 +540,18 @@ export default function App() {
           <button
             type="button"
             className="ghost-button"
+            onClick={() =>
+              setTheme((prev) => (prev === "dark" ? "light" : "dark"))
+            }
+            aria-label={
+              theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+            }
+          >
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
             onClick={() => setSettingsOpen((open) => !open)}
           >
             {settingsOpen ? "Hide settings" : "Settings"}
@@ -572,6 +589,18 @@ export default function App() {
           </div>
           <div className="topbar-right">
             <span className="meta-chip">{feed.filter((i) => i.role === "user").length} prompts</span>
+            <button
+              type="button"
+              className="ghost-button theme-toggle"
+              onClick={() =>
+                setTheme((prev) => (prev === "dark" ? "light" : "dark"))
+              }
+              aria-label={
+                theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+              }
+            >
+              {theme === "dark" ? "Light" : "Dark"}
+            </button>
             {isStreaming ? (
               <button type="button" className="stop-button" onClick={handleStop}>
                 Stop
@@ -617,9 +646,6 @@ export default function App() {
                 files in your workspace, and streams progress as it works.
               </p>
               <div className="suggestion-row">
-                <button onClick={toggleTheme} aria-label="Toggle theme" style={{ marginLeft: 8 }}>
-                  {themeIcon}
-                </button>
                 {[
                   "Add input validation to the generate_code API",
                   "Refactor the agent loop to fail faster on repeated tools",

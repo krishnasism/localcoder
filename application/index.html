@@ -1,8 +1,18 @@
 <!DOCTYPE html>
-<html>
+<html data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <title>Local Coder</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("localcoder.theme");
+          if (t === "light" || t === "dark") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (_) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
