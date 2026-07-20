@@ -28,6 +28,13 @@ module.exports = {
       platforms: ["win32", "darwin", "linux"],
     },
     {
+      name: "@electron-forge/maker-dmg",
+      config: {
+        name: "Localcoder",
+        overwrite: true,
+      },
+    },
+    {
       name: "@electron-forge/maker-deb",
       config: {
         options: {

@@ -115,9 +115,29 @@ In the app:
 pytest -q
 ```
 
-## Package as a standalone Windows app
+## Package as a standalone app
 
 Builds the Electron UI **and** a bundled FastAPI binary so you can share an installer.
+
+### macOS
+
+```sh
+# From repo root (venv active)
+python packaging/build_backend.py
+
+cd application
+npm install
+npm run make:mac
+```
+
+Outputs in `application/out/make/`:
+
+- `Localcoder-<version>-arm64.dmg` (or `x64`) — disk image installer
+- `zip/darwin/...` — portable zip
+
+> **Note:** macOS may show a Gatekeeper warning for unsigned builds. Right-click the `.app` and choose **Open** to bypass it the first time.
+
+### Windows
 
 ```sh
 # From repo root (venv active)
@@ -133,7 +153,7 @@ Outputs in `application/out/make/`:
 - `LocalcoderSetup.exe` — installer (best for sharing)
 - `zip/win32/...` — portable zip
 
-The packaged app starts the API automatically. Users still need Ollama (or another compatible server) running locally.
+The packaged app starts the API automatically on both platforms. Users still need Ollama (or another compatible server) running locally.
 
 ### CI / CD
 
@@ -152,7 +172,8 @@ Or run **Release** from the Actions tab.
 **Notes**
 
 - Unsigned Windows builds may trigger SmartScreen until you add code signing.
-- Forge also has macOS/Linux makers; CI currently focuses on Windows `.exe`.
+- Unsigned macOS builds show a Gatekeeper prompt; right-click → Open to run them.
+- CI currently focuses on Windows `.exe`; macOS builds run locally with `npm run make:mac`.
 
 ## Tips
 
